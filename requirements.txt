@@ -1,0 +1,19 @@
+# Pinned to what Phase 1 was built and verified against.
+#
+# NOTE: nfl_data_py 0.3.3 requires pandas<2, which is why pandas is pinned to
+# the 1.5.x line. See docs/data-sources.md — we only use nfl_data_py for
+# import_ids() and import_snap_counts(); player/team stats and schedules are
+# fetched directly from nflverse (src/nflverse.py) because the library's
+# hardcoded URLs are stale.
+
+pandas==1.5.3
+numpy==1.26.4
+pyarrow>=14.0.0
+nfl_data_py==0.3.3
+requests>=2.31.0
+rapidfuzz==3.14.5
+pydfs-lineup-optimizer==3.6.1
+PyYAML==6.0.3
+
+# dev
+pytest==9.1.1

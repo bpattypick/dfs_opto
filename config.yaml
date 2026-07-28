@@ -1,0 +1,47 @@
+# DFS pipeline configuration.
+#
+# Secrets do NOT belong in this file — it is tracked in git. Put them in
+# config.local.yaml (gitignored), which is deep-merged over this file, or in
+# the environment variable named by each `*_env` key below.
+
+paths:
+  # All paths are resolved relative to the repo root unless absolute.
+  data_dir: data
+  db: data/dfs.sqlite
+  raw_dir: data/raw
+  raw_projections: data/raw/projections
+  raw_salaries: data/raw/salaries
+  raw_odds: data/raw/odds
+  raw_nflverse: data/raw/nflverse
+  manual_overrides: data/manual_overrides.csv
+  unmatched_review: data/unmatched_review.csv
+
+seasons:
+  # Inclusive range pulled by `python -m src.ingest.nfl_stats`.
+  start: 2019
+  end: 2025
+  # 'REG' only for Phase 1 — DK main slates are regular season.
+  season_types: [REG]
+
+crosswalk:
+  # rapidfuzz token_sort_ratio floor. Spec §5.2: never fuzzy across teams.
+  fuzzy_threshold: 90
+  # Backtest replay alerts below this join coverage (spec §7 step 3).
+  min_join_coverage: 0.97
+
+backtest:
+  # Spec §7: approximate pre-lock inactives by zeroing players with 0 snaps
+  # and a projection below this threshold.
+  inactive_projection_threshold: 2.0
+  gpp_lineups: 20
+  gpp_max_exposure: 0.5
+
+odds:
+  # The Odds API — forward-looking only in Phase 1 (spec §5.5).
+  # Backtests use free nflverse closing lines from games.csv.
+  enabled: false
+  api_key_env: ODDS_API_KEY
+  base_url: https://api.the-odds-api.com/v4
+  sport: americanfootball_nfl
+  regions: us
+  markets: [spreads, totals]

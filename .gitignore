@@ -1,0 +1,27 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# The database is rebuildable from data/raw/ + nflverse; don't version it.
+data/dfs.sqlite
+data/dfs.sqlite-journal
+data/dfs.sqlite-wal
+data/dfs.sqlite-shm
+
+# Raw archives are the insurance policy, but they're big and often licensed.
+# Keep them on disk / in backups, not in git. The directory structure is kept
+# so a fresh clone has somewhere to put the weekly downloads; the
+# re-include of directories is what lets the .gitkeep negation apply.
+data/raw/**
+!data/raw/**/
+!data/raw/**/.gitkeep
+
+# Generated review queues
+data/unmatched_review.csv
+
+# Secrets
+config.local.yaml
+.env
