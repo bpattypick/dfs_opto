@@ -150,6 +150,13 @@ def estimate_ownership(
     returns the same lineup, giving rates of 0 or 1; too much and the estimate
     converges on salary-weighted noise.
 
+    **The default is uncalibrated and known to be too low.** At 0.15 the best
+    player on a real slate comes out ~96% owned, which no real field looks like;
+    plausible ownership needs 0.5 or more. Raising it, however, destroys the
+    duplication signal the field generator depends on — see T15 and
+    docs/data-sources.md. Do not treat any single value as correct until real
+    contest standings say where reality sits.
+
     Returns one row per pool player, including those never selected, sorted by
     total_pct descending. Rates are fractions in [0, 1].
     """

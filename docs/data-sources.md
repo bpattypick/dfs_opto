@@ -251,3 +251,39 @@ Two consequences:
   right, and its magnitudes should not be trusted. Real per-player variance,
   which props would supply (H8), is what makes the dup-adjusted ROI numbers
   quantitative rather than directional.
+
+## The field generator cannot produce realistic ownership AND duplication
+
+The `jitter` parameter on `estimate_ownership` was documented as "lightly
+randomized projections" and defaulted to 0.15. That default was a guess, never
+calibrated, and it turns out to control the single most important property of
+the simulated field. On the 2026-w01 NE@SEA pool:
+
+| jitter | top player's ownership | distinct builds / 400 |
+| --- | --- | --- |
+| 0.15 | 96.3% | 144 |
+| 0.30 | 83.7% | 292 |
+| 0.50 | 71.3% | 368 |
+| 0.80 | 61.0% | 383 |
+| 1.20 | 52.3% | 397 |
+
+96% ownership for one player is not a real field, so 0.15 is clearly wrong. But
+raising it destroys the duplication signal — in a 1,500-entry field the top
+build appears 4.73% of the time at jitter 0.15 and **0.07%** at 0.50, the same
+rate as a deliberately differentiated lineup. The leverage edge measured at the
+default disappears entirely at any plausible setting.
+
+**This is structural, not a tuning problem.** The generator samples lineups to
+match *marginal* ownership — each player's individual rate. Real duplication is
+a *joint* property: many entrants independently converging on the same specific
+combination. Marginals do not encode joint structure, so the generator can only
+manufacture duplication by making the entire field near-identical, which also
+produces the absurd 96% marginal. Real contests have diffuse ownership *and*
+meaningful duplication at the same time; this model cannot represent both.
+
+Everything downstream inherits it. T6's ROI comparison and T7's dup-adjusted
+ranking are arithmetically correct and are being fed a field that misrepresents
+the quantity they turn on. Treat duplication output as unvalidated in both
+directions until real standings say where reality sits — that measurement (H2)
+is what distinguishes "tune jitter" from "the generator needs joint structure",
+and no amount of further modelling settles it from the inside.
