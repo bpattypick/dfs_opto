@@ -145,12 +145,38 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     metrics_json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS entries (
+    -- Experiment ledger, one row per contest entry (roadmap v2 Step 1). This
+    -- is the measurement layer: without it, process improvements and variance
+    -- are indistinguishable. Written by src/ledger.py.
+    entry_id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    date                TEXT NOT NULL,   -- entry date, ISO
+    slate_id            TEXT NOT NULL,   -- same convention as salaries.slate_id
+    contest_id          TEXT,
+    contest_type        TEXT NOT NULL,   -- showdown_gpp/showdown_cash/single_entry/...
+    field_size          INTEGER,
+    entry_fee           REAL,            -- 0 or NULL for free contests
+    payout_structure_id TEXT,            -- links to a saved payout table (T6)
+    lineup              TEXT NOT NULL,   -- json list of names; first element is CPT
+    model_version       TEXT NOT NULL,   -- git commit hash that built the lineup
+    sim_mean            REAL,
+    sim_ceiling         REAL,
+    chalk_score         REAL,
+    dup_estimate        REAL,            -- populated by T7
+    -- settled after the contest
+    actual_score        REAL,
+    finish_rank         INTEGER,
+    payout              REAL,
+    roi                 REAL
+);
+
 CREATE INDEX IF NOT EXISTS idx_pws_season_week  ON player_week_stats (season, week);
 CREATE INDEX IF NOT EXISTS idx_pws_team         ON player_week_stats (season, week, team);
 CREATE INDEX IF NOT EXISTS idx_games_season_wk  ON games (season, week);
 CREATE INDEX IF NOT EXISTS idx_salaries_slate   ON salaries (season, week);
 CREATE INDEX IF NOT EXISTS idx_proj_season_week ON projections (season, week);
 CREATE INDEX IF NOT EXISTS idx_xwalk_player     ON id_crosswalk (player_id);
+CREATE INDEX IF NOT EXISTS idx_entries_report   ON entries (contest_type, model_version);
 """
 
 TABLES = (
@@ -163,6 +189,7 @@ TABLES = (
     "projections",
     "odds_snapshots",
     "backtest_runs",
+    "entries",
 )
 
 

@@ -111,7 +111,7 @@ exercises the rest of the pipeline.
 
 ## Schema additions
 
-Four documented departures from the spec's §3 DDL, all additive:
+Five documented departures from the spec's §3 DDL, all additive:
 
 | Table | Addition | Why |
 | --- | --- | --- |
@@ -119,7 +119,21 @@ Four documented departures from the spec's §3 DDL, all additive:
 | `player_week_stats` | `st_tds` | Return TDs are 6 real DK points; `dk_points` is wrong without it |
 | `dst_week_stats` | whole table | Team defense stats don't fit the player columns |
 | `id_crosswalk` | `match_method` values `dst_map`, `exact_name_pos` | Keeps join provenance auditable |
+| `entries` | whole table | The experiment ledger (roadmap v2 Step 1, not in the July spec) |
 
 Scored DST rows are also mirrored into `player_week_stats` under
 `player_id = 'DST_<TEAM>'` so the optimizer can treat every DK roster slot
 uniformly.
+
+## The ledger's dirty-tree guard depends on `.gitignore`
+
+`src/ledger.py` refuses to log an entry while `git status --porcelain` reports
+anything, so that every entered lineup is attributable to a commit. That check
+counts **untracked** files too, which makes it quietly dependent on
+`.gitignore` staying accurate: the DB (`data/dfs.sqlite`) and its `-wal`/`-shm`
+siblings are ignored, so ordinary pipeline runs don't trip it.
+
+If a future step writes a generated file that isn't ignored — a scratch CSV, a
+sim cache, a notebook checkpoint — every ledger write starts failing 15 minutes
+before lock, which is the worst possible time to debug it. Ignore new generated
+artifacts when you add them, not after.

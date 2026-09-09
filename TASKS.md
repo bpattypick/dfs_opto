@@ -13,6 +13,7 @@ These block downstream tasks. Each is short.
 - [ ] **H1. Write the Step 0 decision.** Personal edge, community product, or both. One paragraph in `docs/decisions.md` with the success metric. *Blocks: T7 and everything in Nov+.*
 - [ ] **H2. Download contest standings** after every contest entered, into `data/raw/standings/`. Recurring, every slate. *Blocks: T3, T4, and the entire ownership model.*
 - [ ] **H3. Decide the news feed** for late-swap (RSS vs paid aggregator vs X API). Price it. Record in `docs/decisions.md`. *Blocks: T8. Due before mid-October.*
+- [ ] **H5. Decide whether the ledger needs a `results.md` view.** Roadmap Step 1 asks for a notebook/view; T1's acceptance asked for `python -m src.ledger report`, which is what was built. Confirm the CLI report is enough or spec the view. *Blocks: nothing.*
 - [ ] **H4. Vendor projection subscription** — decide yes/no and which. If yes, start archiving Thursday + Sunday exports. *Blocks: T10 only. Low urgency under current scope.*
 
 **Resolved:** paid contest entry from home is confirmed working — real-money entries are on the table, so the ledger's ROI numbers are live money, not paper.
@@ -20,11 +21,6 @@ These block downstream tasks. Each is short.
 ---
 
 ## Ready
-
-### T1. Experiment ledger
-Create `src/ledger.py` and the `entries` table per the schema in `docs/dfs-roadmap-v2.md` Step 1.
-**Acceptance:** `python -m src.ledger add --help` works; a row can be added pre-contest with lineup + model_version (auto-read from `git rev-parse HEAD`) and updated post-contest with actual_score/finish_rank/payout/roi; `python -m src.ledger report` prints ROI by contest_type × model_version with entry counts; refuses to add a row if the working tree is dirty (uncommitted code must not build entered lineups).
-**Note:** a starter implementation exists at `ledger.py` in the project root — move it into `src/`, wire it to the main SQLite DB instead of its own file, and add tests.
 
 ### T2. Contest rules doc
 Write `CONTEST_RULES.md` from roadmap Step 2: soft-field default, Showdown-first, rake awareness, cash/GPP allocation.
@@ -65,3 +61,8 @@ From the field generator, estimate exact-match frequency for a candidate lineup;
 ## Done
 
 *(append: task id, date, one-line result)*
+
+- **T1. Experiment ledger** — 2026-09-09 — `ledger.py` moved to `src/ledger.py` and wired to the
+  main SQLite DB (`entries` table added to `src/db.py`, so `python -m src.db` builds it); add /
+  result / report subcommands, dirty-tree refusal verified against the real repo, 32 tests in
+  `tests/test_ledger.py`. Raised H5 (roadmap's `results.md` view vs the CLI report).
