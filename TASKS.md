@@ -14,6 +14,7 @@ These block downstream tasks. Each is short.
 - [ ] **H2. Download contest standings** after every contest entered, into `data/raw/standings/`. Recurring, every slate. *Blocks: T3, T4, and the entire ownership model.*
 - [ ] **H3. Decide the news feed** for late-swap (RSS vs paid aggregator vs X API). Price it. Record in `docs/decisions.md`. *Blocks: T8. Due before mid-October.*
 - [ ] **H5. Decide whether the ledger needs a `results.md` view.** Roadmap Step 1 asks for a notebook/view; T1's acceptance asked for `python -m src.ledger report`, which is what was built. Confirm the CLI report is enough or spec the view. *Blocks: nothing.*
+- [ ] **H6. Set the cash/GPP allocation and stake sizing.** `CONTEST_RULES.md` R5 encodes the roadmap's shape (majority cash/single-entry, minority GPP) but not the numbers — the exact split, the per-entry stake, and whether R4 should carry a hard rake ceiling are money calls. Record in `docs/decisions.md`. *Blocks: nothing in code; R5 stays soft until answered.*
 - [ ] **H4. Vendor projection subscription** — decide yes/no and which. If yes, start archiving Thursday + Sunday exports. *Blocks: T10 only. Low urgency under current scope.*
 
 **Resolved:** paid contest entry from home is confirmed working — real-money entries are on the table, so the ledger's ROI numbers are live money, not paper.
@@ -21,10 +22,6 @@ These block downstream tasks. Each is short.
 ---
 
 ## Ready
-
-### T2. Contest rules doc
-Write `CONTEST_RULES.md` from roadmap Step 2: soft-field default, Showdown-first, rake awareness, cash/GPP allocation.
-**Acceptance:** the doc exists and each rule is stated as a check that can be applied to a candidate contest before entry. No modeling.
 
 ### T3. Standings ingester
 Parse DK contest standings CSVs from `data/raw/standings/` into an `actual_ownership` table (slate_id, contest_id, player_id, cpt_pct, flex_pct, total_pct) plus a `contest_payouts` table from the payout column.
@@ -66,3 +63,8 @@ From the field generator, estimate exact-match frequency for a candidate lineup;
   main SQLite DB (`entries` table added to `src/db.py`, so `python -m src.db` builds it); add /
   result / report subcommands, dirty-tree refusal verified against the real repo, 32 tests in
   `tests/test_ledger.py`. Raised H5 (roadmap's `results.md` view vs the CLI report).
+- **T2. Contest rules doc** — 2026-09-09 — `CONTEST_RULES.md` written from roadmap Step 2 as seven
+  pre-entry checks (R1 Showdown-only, R2 soft field, R3 no marquee GPP with a ledger-based unlock,
+  R4 effective rake + overlay, R5 allocation, R6 human enters, R7 logged before lock), plus a
+  deviation-recording convention. Doc only, no modeling. Raised H6 (the allocation numbers are a
+  money call, so R5 is deliberately soft).
