@@ -201,3 +201,23 @@ From the 2026-w01 NE@SEA export (68 players, 136 rows):
 Raw archives are gitignored (`data/raw/**`), so an archived export lives only on
 the machine that downloaded it. Keep your own copy; a fresh clone will not have
 it.
+
+## Duplication can invert a lineup's value
+
+Running T6 over tonight's real slate, the highest-projected build finished
+*better* than a lower-projected alternative on every conventional measure —
+higher projection, better median rank (954 vs 1,368 of 3,001), higher cash rate
+(30% vs 23%) — and was still far worse to enter. It appeared 143 times in a
+3,000-entry field against the alternative's 6, so its prizes were split ~143
+ways.
+
+The mechanism is tie splitting: identical lineups score identically in every
+trial, tie, and share the pooled prize for the ranks they occupy. That is why
+`simulate_contest` settles ties the way DK does rather than breaking them
+arbitrarily — an arbitrary tiebreak would hide exactly the effect the Showdown
+strategy is built to exploit.
+
+The practical lesson for reading sim output: median rank and cash rate can both
+favour the lineup that is worse to enter. ROI is the metric (CLAUDE.md principle
+5), and in a Showdown it is duplication, not projection, that most often decides
+it.

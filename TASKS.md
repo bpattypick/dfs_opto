@@ -16,6 +16,7 @@ These block downstream tasks. Each is short.
 - [ ] **H5. Decide whether the ledger needs a `results.md` view.** Roadmap Step 1 asks for a notebook/view; T1's acceptance asked for `python -m src.ledger report`, which is what was built. Confirm the CLI report is enough or spec the view. *Blocks: nothing.*
 - [ ] **H6. Set the cash/GPP allocation and stake sizing.** `CONTEST_RULES.md` R5 encodes the roadmap's shape (majority cash/single-entry, minority GPP) but not the numbers — the exact split, the per-entry stake, and whether R4 should carry a hard rake ceiling are money calls. Record in `docs/decisions.md`. *Blocks: nothing in code; R5 stays soft until answered.*
 - [ ] **H7. Confirm `AvgPointsPerGame` as the interim projection source.** Verified present in the real 2026-w01 NE@SEA export and good enough to drive T4/T5 end-to-end. Two things need your call: (a) in Week 1 it is *last season's* average, so it is a weak projection early in the year; (b) for backtests it must be the value archived pre-lock, not read from a later file, or it breaks the leakage guarantee. Say yes and T11 wires it in. *Blocks: running T4/T5 on real slates.*
+- [ ] **H8. Player prop lines — pull now, or wait for January?** Props are a much better projection input than `AvgPointsPerGame` (forward-looking, market-priced, already absorb injury/matchup/game-script news) and would also give the score simulator real per-player variance instead of the placeholder's flat coefficient. Two reasons it is your call, not mine: player-prop markets are a **paid tier** on The Odds API (`config.yaml` has the odds block wired for spreads/totals only, currently disabled), and the roadmap schedules props for Step 5 in **January**, so doing it now is a second modelling improvement this month against the one-per-month cadence. If yes, props must be archived pre-lock with `pulled_at` or backtests leak. *Blocks: nothing; would upgrade T4, T5 and T6 inputs at once.*
 - [ ] **H4. Vendor projection subscription** — decide yes/no and which. If yes, start archiving Thursday + Sunday exports. *Blocks: T10, and is one answer to H7. Low urgency only if H7 is settled another way.*
 
 **Resolved:** paid contest entry from home is confirmed working — real-money entries are on the table, so the ledger's ROI numbers are live money, not paper.
@@ -27,10 +28,6 @@ These block downstream tasks. Each is short.
 ### T3. Standings ingester
 Parse DK contest standings CSVs from `data/raw/standings/` into an `actual_ownership` table (slate_id, contest_id, player_id, cpt_pct, flex_pct, total_pct) plus a `contest_payouts` table from the payout column.
 **Acceptance:** idempotent; routes names through the crosswalk; join coverage ≥97% with a loud failure below; one test against a real archived file. *Blocked until H2 has produced at least one file.*
-
-### T6. Placement + ROI (contest sim 3b)
-For each Monte Carlo trial: score the generated field and the candidate lineup, rank, map to the saved payout structure, accumulate payout.
-**Acceptance:** returns expected ROI, cash rate, and top-1% rate for a candidate lineup given a contest size + payout table; test with a synthetic payout structure where the correct answer is hand-computable.
 
 ### T7. Duplication model (contest sim 3c)
 From the field generator, estimate exact-match frequency for a candidate lineup; expose `dup_estimate`; add a dup-penalty term to lineup selection.
@@ -53,6 +50,7 @@ From the field generator, estimate exact-match frequency for a candidate lineup;
   salary silently becomes 1.5x too high. Filter to the FLEX/UTIL row explicitly and fail loudly if a
   slate yields two rows for one name. Retain `Status` (OUT/IR/Q — 22 of 68 players in the real export)
   and `AvgPointsPerGame` at the same time, which is what H7 needs.
+- **T13. Real score simulator.** `src/contest.py` takes an injected score model and ships `independent_normal_scores` as a deliberate placeholder. It draws players independently, so a QB and his WR1 are uncorrelated — which understates the variance of a stacked lineup and overstates it for a spread one. Any conclusion about stacking from the current model is an artefact of the model. Roadmap Step 3b assumed an "existing sim"; there isn't one. Needs per-player distributions and a correlation structure (props would supply both — see H8).
 - **T12. Player status filtering.** Nothing excludes OUT/IR players from a pool yet; the T4/T5 runs
   above filtered by hand. The same DK `Status` field is the free late-swap feed roadmap Step 4 wants,
   so this is worth building once and reusing.
@@ -89,3 +87,8 @@ it — that one prices duplication against ROI rather than showing the trade by 
   target ownership, plus `src/showdown.py` holding the shared roster rules (cap, 1 CPT + 5 FLEX,
   both teams, `Lineup.key()` for T7 duplication). Deficit-weighted sampling plus a legality-preserving
   repair pass; realized ownership within ~0.03 per slot, stated tolerance 0.05 in tests. 24 tests.
+- **T6. Placement + ROI** — 2026-09-09 — `src/contest.py`: `PayoutTable` (with `effective_rake` for
+  CONTEST_RULES R4) and `simulate_contest()` returning expected ROI, cash rate, top-1%, win rate and
+  rank distribution. Ties split the pooled prize the way DK settles them, so duplication is priced
+  without a separate model. Score model is injected, not owned — see T13. 28 tests, all against
+  deterministic scores with hand-computable answers.
