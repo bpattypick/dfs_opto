@@ -57,6 +57,11 @@ From the field generator, estimate exact-match frequency for a candidate lineup;
   above filtered by hand. The same DK `Status` field is the free late-swap feed roadmap Step 4 wants,
   so this is worth building once and reusing.
 
+**One-off:** `scripts/showdown_dup_report.py` ranks candidate lineups by projection against
+duplication for a single slate. Written for 2026-w01 NE@SEA at the owner's request, outside the
+queue, and committed so that any lineup entered from it is attributable to a commit. T7 supersedes
+it — that one prices duplication against ROI rather than showing the trade by eye.
+
 ## Blocked
 
 *(move tasks here with a one-line reason; check each session whether the blocker cleared)*
