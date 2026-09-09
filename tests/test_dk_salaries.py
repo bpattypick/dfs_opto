@@ -213,3 +213,92 @@ class TestJoinCoverage:
             if ref_team.get(r["player_id"]) != r["team"]
         ]
         assert not mismatched, f"cross-team matches: {mismatched}"
+
+
+SHOWDOWN_FIXTURE = Path(__file__).parent / "fixtures" / "2026-w01_dk_showdown-ne-sea.csv"
+
+HEADER = ("Position,Name + ID,Name,ID,Roster Position,Salary,Game Info,"
+          "TeamAbbrev,AvgPointsPerGame,Status")
+GAME = "NE@SEA 09/09/2026 08:20PM ET"
+
+
+def write_showdown(tmp_path, rows, name="2026-w01_dk_showdown-test.csv"):
+    """rows: (player, roster_position, salary) — written verbatim, no pairing."""
+    lines = [HEADER]
+    for i, (player, slot, salary) in enumerate(rows):
+        lines.append(f"WR,{player} ({i}),{player},{i},{slot},{salary},"
+                     f"{GAME},SEA,10.0,")
+    path = tmp_path / name
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+class TestShowdownExport:
+    def test_cpt_and_flex_rows_collapse_to_one_row_per_player(self):
+        # (slate_id, dk_name) is the primary key: two rows per player would be
+        # silently merged by the upsert, storing whichever landed last.
+        frame = dk_salaries.parse_dk_export(SHOWDOWN_FIXTURE)
+        assert len(frame) == 10
+        assert frame["dk_name"].is_unique
+
+    def test_the_base_salary_is_kept_not_the_captain_salary(self):
+        frame = dk_salaries.parse_dk_export(SHOWDOWN_FIXTURE)
+        salary = frame.set_index("dk_name")["dk_salary"]
+        # JSN is 10,600 at base and 15,900 at CPT.
+        assert salary["Jaxon Smith-Njigba"] == 10600
+
+    def test_status_and_projection_are_retained(self):
+        # Both were being discarded: Status is the free late-swap signal and
+        # AvgPointsPerGame is the interim projection source.
+        frame = dk_salaries.parse_dk_export(SHOWDOWN_FIXTURE).set_index("dk_name")
+        assert frame.loc["Zach Charbonnet", "status"] == "OUT"
+        assert frame.loc["Patriots", "status"] == "IR"
+        assert frame.loc["Tory Horton", "status"] == "Q"
+        assert frame.loc["Drake Maye", "status"] == ""
+        assert frame.loc["Drake Maye", "avg_points"] == pytest.approx(20.90)
+
+    def test_a_classic_slate_is_untouched(self):
+        # Classic exports have their own FLEX slot and no CPT, so detection must
+        # key on CPT or every main-slate export would be filtered to nothing.
+        frame = dk_salaries.parse_dk_export(FIXTURE)
+        assert len(frame) > 10
+        assert frame["dk_name"].is_unique
+
+    def test_util_is_accepted_as_a_base_position(self, tmp_path):
+        path = write_showdown(tmp_path, [
+            ("Alpha", "CPT", 15000), ("Alpha", "UTIL", 10000),
+            ("Bravo", "CPT", 9000), ("Bravo", "UTIL", 6000),
+        ])
+        frame = dk_salaries.parse_dk_export(path)
+        assert sorted(frame["dk_salary"]) == [6000, 10000]
+
+    def test_a_broken_captain_multiplier_fails_loudly(self, tmp_path):
+        # If DK stops pricing CPT at 1.5x, the base salary we store is wrong and
+        # every downstream lineup is priced against a fiction.
+        path = write_showdown(tmp_path, [
+            ("Alpha", "CPT", 12000), ("Alpha", "FLEX", 10000),   # 1.2x
+            ("Bravo", "CPT", 9000), ("Bravo", "FLEX", 6000),
+        ])
+        with pytest.raises(dk_salaries.SalaryFormatError, match="1.5x"):
+            dk_salaries.parse_dk_export(path)
+
+    def test_a_captain_with_no_base_row_fails_loudly(self, tmp_path):
+        path = write_showdown(tmp_path, [
+            ("Alpha", "CPT", 15000), ("Alpha", "FLEX", 10000),
+            ("Ghost", "CPT", 9000),
+        ])
+        with pytest.raises(dk_salaries.SalaryFormatError, match="no base row"):
+            dk_salaries.parse_dk_export(path)
+
+    def test_captain_rows_with_no_base_rows_at_all_fail_loudly(self, tmp_path):
+        path = write_showdown(tmp_path, [("Alpha", "CPT", 15000)])
+        with pytest.raises(dk_salaries.SalaryFormatError, match="no FLEX/UTIL"):
+            dk_salaries.parse_dk_export(path)
+
+    def test_duplicate_names_are_reported_not_merged(self, tmp_path):
+        path = write_showdown(tmp_path, [
+            ("Alpha", "FLEX", 10000), ("Alpha", "FLEX", 9000),
+            ("Bravo", "FLEX", 6000),
+        ])
+        with pytest.raises(dk_salaries.SalaryFormatError, match="appear twice"):
+            dk_salaries.parse_dk_export(path)

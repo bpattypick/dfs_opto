@@ -38,37 +38,23 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src import showdown  # noqa: E402
 from src.field import generate_field  # noqa: E402
+from src.ingest.dk_salaries import parse_dk_export  # noqa: E402
 from src.ownership import optimal_lineup  # noqa: E402
+from src.pool import build_pool, questionable  # noqa: E402
 from src.showdown import Lineup  # noqa: E402
 
-UNAVAILABLE = ("OUT", "IR")
-
-
 def load_pool(path: str) -> pd.DataFrame:
-    """Build a player pool from a DK Showdown export.
-
-    Reads the FLEX row for base salary (the CPT row is the same player at 1.5x)
-    and drops players DK has flagged unavailable.
-    """
-    raw = pd.read_csv(path)
-    flex = raw[raw["Roster Position"].astype(str).str.upper() == "FLEX"].copy()
-    if flex.empty:
-        raise SystemExit(f"{path}: no FLEX rows — is this a Showdown export?")
-
-    status = flex["Status"].fillna("").astype(str).str.upper()
-    pool = pd.DataFrame({
-        "player_id": flex["ID"].astype(str),
-        "name": flex["Name"].astype(str).str.strip(),
-        "team": flex["TeamAbbrev"].astype(str),
-        "salary": flex["Salary"].astype(float),
-        "projection": flex["AvgPointsPerGame"].astype(float).clip(lower=0.0),
-    })
-    dropped = pool[status.isin(UNAVAILABLE)]
-    if len(dropped):
-        print(f"excluding {len(dropped)} OUT/IR players: "
-              f"{', '.join(sorted(dropped['name'])[:6])}"
-              f"{' ...' if len(dropped) > 6 else ''}\n")
-    return pool[~status.isin(UNAVAILABLE)].reset_index(drop=True)
+    """Player pool from a DK Showdown export, minus anyone DK has ruled out."""
+    parsed = parse_dk_export(path)
+    unavailable = len(parsed) - len(build_pool(parsed))
+    if unavailable:
+        print(f"excluding {unavailable} OUT/IR players")
+    flagged = questionable(parsed)
+    if len(flagged):
+        print(f"questionable (kept, often under-owned): "
+              f"{', '.join(sorted(flagged['dk_name']))}")
+    print()
+    return build_pool(parsed)
 
 
 def candidates_and_ownership(pool, runs, jitter, seed):

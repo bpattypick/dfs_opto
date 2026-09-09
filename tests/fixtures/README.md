@@ -19,3 +19,21 @@ and test nothing:
   the manual-review queue gets exercised
 
 Regenerate with `scripts/make_fixture.py` if the roster data changes.
+
+## `2026-w01_dk_showdown-ne-sea.csv`
+
+A DraftKings **Showdown** export, used to exercise CPT/FLEX collapsing and
+status filtering.
+
+**Salaries and player IDs are fabricated**, same as the main-slate fixture. Real
+names, teams and matchup, from the 2026 week 1 NE@SEA slate.
+
+What it has to reproduce:
+
+- every player twice, one `CPT` row and one `FLEX` row
+- CPT salary at exactly 1.5x the base, since the parser verifies that ratio
+  rather than trusting it
+- rows sorted by salary descending, as DK ships them — the ordering that used to
+  be load-bearing and no longer is
+- `Status` values `OUT`, `IR` and `Q`, so pool filtering keeps the questionable
+  player and drops the other two

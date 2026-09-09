@@ -29,10 +29,6 @@ These block downstream tasks. Each is short.
 Parse DK contest standings CSVs from `data/raw/standings/` into an `actual_ownership` table (slate_id, contest_id, player_id, cpt_pct, flex_pct, total_pct) plus a `contest_payouts` table from the payout column.
 **Acceptance:** idempotent; routes names through the crosswalk; join coverage ≥97% with a loud failure below; one test against a real archived file. *Blocked until H2 has produced at least one file.*
 
-### T7. Duplication model (contest sim 3c)
-From the field generator, estimate exact-match frequency for a candidate lineup; expose `dup_estimate`; add a dup-penalty term to lineup selection.
-**Acceptance:** `dup_estimate` recorded in the ledger for every entry; a comparison report shows dup-adjusted ROI vs raw ROI for a slate's candidate pool.
-
 ---
 
 ## Backlog (do not start before the month indicated in the roadmap)
@@ -43,17 +39,7 @@ From the field generator, estimate exact-match frequency for a candidate lineup;
 
 ## Found while working (not yet scheduled)
 
-- **T11. Showdown-aware salary loading.** `parse_dk_export` keeps both the CPT and FLEX row for every
-  player, but `salaries` is keyed `(slate_id, dk_name)`, so the upsert collapses them to one row. It
-  currently stores the correct FLEX base salary *only because* DK sorts the export by salary
-  descending, which puts CPT first and lets FLEX win. If DK ever changes that sort, every Showdown
-  salary silently becomes 1.5x too high. Filter to the FLEX/UTIL row explicitly and fail loudly if a
-  slate yields two rows for one name. Retain `Status` (OUT/IR/Q — 22 of 68 players in the real export)
-  and `AvgPointsPerGame` at the same time, which is what H7 needs.
 - **T13. Real score simulator.** `src/contest.py` takes an injected score model and ships `independent_normal_scores` as a deliberate placeholder. It draws players independently, so a QB and his WR1 are uncorrelated — which understates the variance of a stacked lineup and overstates it for a spread one. Any conclusion about stacking from the current model is an artefact of the model. Roadmap Step 3b assumed an "existing sim"; there isn't one. Needs per-player distributions and a correlation structure (props would supply both — see H8).
-- **T12. Player status filtering.** Nothing excludes OUT/IR players from a pool yet; the T4/T5 runs
-  above filtered by hand. The same DK `Status` field is the free late-swap feed roadmap Step 4 wants,
-  so this is worth building once and reusing.
 
 **One-off:** `scripts/showdown_dup_report.py` ranks candidate lineups by projection against
 duplication for a single slate. Written for 2026-w01 NE@SEA at the owner's request, outside the
@@ -69,6 +55,11 @@ it — that one prices duplication against ROI rather than showing the trade by 
   Remaining: the calibration script comparing it to `actual_ownership` and reporting MAE, which
   needs T3, which needs H2 to produce a standings file. Running it on a real slate additionally
   needs H7 (no projection source exists yet).
+- **T7. Duplication model** — blocked on **H1** (the Step 0 decision), per the human-only queue.
+  Worth noting the ground has shifted: T6 already prices duplication through tie splitting, and
+  `scripts/showdown_dup_report.py` already reports exact-match frequency, so what remains of T7 is
+  recording `dup_estimate` on every ledger entry and adding a dup penalty to lineup selection.
+  Neither obviously depends on H1 — worth re-reading that dependency when H1 is answered.
 
 ## Done
 
@@ -92,3 +83,13 @@ it — that one prices duplication against ROI rather than showing the trade by 
   rank distribution. Ties split the pooled prize the way DK settles them, so duplication is priced
   without a separate model. Score model is injected, not owned — see T13. 28 tests, all against
   deterministic scores with hand-computable answers.
+- **T11. Showdown-aware salary loading** — 2026-09-09 — `collapse_captain_rows()` folds a Showdown
+  export's CPT/FLEX pairs to one base-salary row per player instead of relying on DK's sort order,
+  and verifies the 1.5x captain price rather than assuming it. `status` and `avg_points` are retained
+  (both were discarded); `salaries` gained those columns with an ALTER-based migration so existing
+  databases don't hit "no such column". Classic slates are untouched — detection keys on CPT, since
+  Classic has its own FLEX slot. 9 tests + a Showdown fixture.
+- **T12. Player status filtering** — 2026-09-09 — `src/pool.py`: `build_pool()` excludes OUT/IR
+  (46 of 68 on the real slate, matching the hand filtering) and keeps Q players, who usually play and
+  are often under-owned. Plus `questionable()` and `status_changes()`, the cheapest form of roadmap
+  Step 4 — diff two pulls of the same export before lock, no news feed needed. 26 tests.

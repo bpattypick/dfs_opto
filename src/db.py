@@ -114,6 +114,11 @@ CREATE TABLE IF NOT EXISTS salaries (
     roster_position TEXT,            -- QB/RB/WR/TE/FLEX/DST
     team            TEXT,
     opponent        TEXT,
+    -- ADDITIONS: DK ships both in every export and both were being discarded.
+    -- status is OUT/IR/Q (also the free late-swap signal, roadmap Step 4);
+    -- avg_points is DK's AvgPointsPerGame, the interim projection (H7).
+    status          TEXT,
+    avg_points      REAL,
     PRIMARY KEY (slate_id, dk_name)
 );
 
@@ -224,8 +229,21 @@ def session(path: str | Path | None = None) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+# Columns added to tables after the first release. CREATE TABLE IF NOT EXISTS
+# will not add them to a database that already exists, and the resulting
+# "no such column" at ingest time is a confusing way to find that out.
+_ADDED_COLUMNS = {
+    "salaries": (("status", "TEXT"), ("avg_points", "REAL")),
+}
+
+
 def create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    for table, columns in _ADDED_COLUMNS.items():
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, kind in columns:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
 
 
 def upsert(

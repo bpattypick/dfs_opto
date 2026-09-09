@@ -40,6 +40,16 @@ log = logging.getLogger(__name__)
 
 SOURCE = "dk"
 
+# DK Showdown lists every player twice: a CPT row at 1.5x salary and a
+# FLEX/UTIL row at base. `salaries` is keyed (slate_id, dk_name), so both rows
+# land on one key and whichever is written last wins. Today that happens to be
+# the FLEX row only because DK sorts the export by salary descending; a sort
+# change would silently store every salary 1.5x too high. So collapse the pair
+# explicitly instead of relying on file order (CLAUDE.md conventions).
+CAPTAIN_POSITION = "CPT"
+BASE_POSITIONS = ("FLEX", "UTIL")
+CAPTAIN_SALARY_MULTIPLIER = 1.5
+
 # 2026-w01_dk_main.csv -> season 2026, week 1, slate 'main'
 # Hyphens are allowed in the slate so a Showdown can name its game
 # (2026-w01_dk_showdown-ne-sea.csv). Without that, every Showdown in a week
@@ -135,12 +145,72 @@ def parse_dk_export(path: str | Path) -> pd.DataFrame:
         _opponent_from_game_info(g, t) for g, t in zip(game_info, out["team"])
     ]
     out["source_id"] = column("ID").astype(str).str.strip()
+    out["status"] = column("Status").fillna("").astype(str).str.strip().str.upper()
+    out["avg_points"] = pd.to_numeric(column("AvgPointsPerGame"), errors="coerce")
 
     out = out[out["dk_name"].notna() & (out["dk_name"] != "") & out["dk_salary"].notna()]
     if out.empty:
         raise SalaryFormatError(f"{Path(path).name}: parsed zero usable salary rows")
     out["dk_salary"] = out["dk_salary"].astype(int)
+    out = collapse_captain_rows(out, Path(path).name)
+
+    duplicated = out["dk_name"][out["dk_name"].duplicated()].unique()
+    if len(duplicated):
+        # (slate_id, dk_name) is the primary key, so duplicates here would be
+        # silently merged by the upsert rather than reported.
+        raise SalaryFormatError(
+            f"{Path(path).name}: {len(duplicated)} player(s) appear twice after "
+            f"parsing, e.g. {sorted(duplicated)[:3]}"
+        )
     return out.reset_index(drop=True)
+
+
+def collapse_captain_rows(frame: pd.DataFrame, name: str) -> pd.DataFrame:
+    """Reduce a Showdown export's CPT/FLEX pairs to one base-salary row each.
+
+    A no-op for Classic slates, which have no CPT rows (their own ``FLEX`` is an
+    ordinary roster slot, so detection keys on CPT rather than on FLEX).
+
+    Verifies DK's 1.5x captain pricing rather than trusting it: if the ratio
+    ever stops holding, the base salary this stores is wrong and every downstream
+    lineup is priced against a fiction.
+    """
+    positions = frame["roster_position"].astype(str).str.upper()
+    if not (positions == CAPTAIN_POSITION).any():
+        return frame
+
+    captains = frame[positions == CAPTAIN_POSITION]
+    base = frame[positions.isin(BASE_POSITIONS)]
+    if base.empty:
+        raise SalaryFormatError(
+            f"{name}: Showdown export has CPT rows but no {'/'.join(BASE_POSITIONS)} "
+            "rows to take base salaries from"
+        )
+
+    cpt_salary = captains.set_index("dk_name")["dk_salary"]
+    base_salary = base.set_index("dk_name")["dk_salary"]
+    shared = base_salary.index.intersection(cpt_salary.index)
+    mismatched = [
+        player for player in shared
+        if cpt_salary[player] != round(base_salary[player] * CAPTAIN_SALARY_MULTIPLIER)
+    ]
+    if mismatched:
+        raise SalaryFormatError(
+            f"{name}: CPT salary is not {CAPTAIN_SALARY_MULTIPLIER}x the base salary "
+            f"for {len(mismatched)} player(s), e.g. {sorted(mismatched)[:3]}. "
+            "The stored base salary would be wrong — check DK's format."
+        )
+
+    missing = cpt_salary.index.difference(base_salary.index)
+    if len(missing):
+        raise SalaryFormatError(
+            f"{name}: {len(missing)} player(s) have a CPT row but no base row, "
+            f"e.g. {sorted(missing)[:3]}"
+        )
+
+    log.info("showdown export: collapsed %d CPT/%d base rows to %d players",
+             len(captains), len(base), len(base))
+    return base
 
 
 def parse_rotoguru(text: str, season: int, week: int, slate: str = "main") -> pd.DataFrame:
