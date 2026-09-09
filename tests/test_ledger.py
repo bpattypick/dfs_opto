@@ -159,7 +159,30 @@ class TestSettleEntry:
 
 class TestReport:
     def test_empty_ledger_says_so(self, conn):
-        assert ledger.format_report(ledger.report_rows(conn)) == "No entries logged yet."
+        assert "No entries logged yet." in ledger.format_report(ledger.report_rows(conn))
+
+    def test_the_season_metric_heads_every_report(self, conn):
+        # Roadmap Step 0: the metric sits at the top of the ledger so it is read
+        # every time results are, rather than remembered.
+        assert ledger.format_report([]).startswith(ledger.SUCCESS_METRIC)
+        _add(conn, entry_fee=5.0)
+        assert ledger.format_report(ledger.report_rows(conn)).startswith(
+            ledger.SUCCESS_METRIC
+        )
+
+    def test_progress_tracks_the_closest_cell_not_the_total(self, conn):
+        # Entries spread across contest types never produce a conclusion, so the
+        # total would flatter the position.
+        for _ in range(3):
+            _add(conn, contest_type="showdown_cash")
+        _add(conn, contest_type="showdown_gpp")
+        report = ledger.format_report(ledger.report_rows(conn))
+        assert f"3/{ledger.MIN_N} in showdown_cash" in report
+
+    def test_reaching_n_is_reported_as_such(self, conn):
+        for _ in range(ledger.MIN_N):
+            _add(conn, contest_type="showdown_cash")
+        assert "At N: showdown_cash" in ledger.format_report(ledger.report_rows(conn))
 
     def test_groups_by_contest_type_and_model_version(self, conn):
         _add(conn, contest_type="showdown_gpp", model_version="aaa")

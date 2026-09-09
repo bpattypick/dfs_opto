@@ -48,6 +48,14 @@ MIN_N = 50
 # model_version for entries backfilled outside a git checkout.
 NO_GIT = "no-git"
 
+# Roadmap Step 0 asks for the season's success metric at the top of the ledger,
+# so it is read every time results are, rather than remembered. Set by H1 —
+# see docs/decisions.md for the reasoning and what follows from it.
+SUCCESS_METRIC = (
+    f"Season 1: {MIN_N}+ entries in ONE contest type, each attributable to a "
+    "commit, showing positive ROI in that cell."
+)
+
 
 class LedgerError(RuntimeError):
     """A ledger operation that must not silently succeed."""
@@ -178,10 +186,26 @@ def report_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def format_report(rows: Sequence[sqlite3.Row]) -> str:
+    header = [SUCCESS_METRIC, ""]
     if not rows:
-        return "No entries logged yet."
+        return "\n".join(header + ["No entries logged yet."])
 
-    lines = [
+    # Progress against the metric is the closest cell to N, not the total:
+    # entries spread across contest types never produce a conclusion.
+    best = max(rows, key=lambda r: r["n"])
+    if best["n"] >= MIN_N:
+        header.append(
+            f"At N: {best['contest_type']} has {best['n']} entries on "
+            f"{best['model_version']}."
+        )
+    else:
+        header.append(
+            f"Progress: {best['n']}/{MIN_N} in {best['contest_type']} "
+            f"({best['model_version']}) — the closest cell to a conclusion."
+        )
+    header.append("")
+
+    lines = header + [
         f"{'contest_type':<20}{'version':<14}{'n':>5}{'staked':>9}{'returned':>10}"
         f"{'ROI':>9}{'cash%':>8}{'pend':>6}"
     ]

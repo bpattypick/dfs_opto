@@ -10,7 +10,7 @@ Tasks are ordered. Order reflects the roadmap's monthly cadence — don't skip a
 
 These block downstream tasks. Each is short.
 
-- [ ] **H1. Write the Step 0 decision.** Personal edge, community product, or both. One paragraph in `docs/decisions.md` with the success metric. *Blocks: T7 and everything in Nov+.*
+- [x] **H1. Step 0 — ANSWERED 2026-09-09: both, personal edge first.** The product has nothing to sell without a track record, so the product phase depends on the personal-edge phase succeeding. Season-1 metric: 50+ entries in ONE contest type, each attributable to a commit, showing positive ROI in that cell — now printed at the top of `python -m src.ledger report`. Full reasoning and consequences in `docs/decisions.md`. **Feeds H6: concentrate entries in one contest type (cash/single-entry) rather than splitting — at ~3 slates/week for 17 weeks, splitting means neither cell reaches N.**
 - [ ] **H2. Download contest standings** after every contest entered, into `data/raw/standings/`. Recurring, every slate. *Blocks: T3, T4, and the entire ownership model.*
 - [ ] **H3. Decide the news feed** for late-swap (RSS vs paid aggregator vs X API). Price it. Record in `docs/decisions.md`. *Blocks: T8. Due before mid-October.*
 - [ ] **H5. Decide whether the ledger needs a `results.md` view.** Roadmap Step 1 asks for a notebook/view; T1's acceptance asked for `python -m src.ledger report`, which is what was built. Confirm the CLI report is enough or spec the view. *Blocks: nothing.*
@@ -24,6 +24,11 @@ These block downstream tasks. Each is short.
 ---
 
 ## Ready
+
+### T7. Duplication model (contest sim 3c) — UNBLOCKED by H1
+From the field generator, estimate exact-match frequency for a candidate lineup; expose `dup_estimate`; add a dup-penalty term to lineup selection.
+**Acceptance:** `dup_estimate` recorded in the ledger for every entry; a comparison report shows dup-adjusted ROI vs raw ROI for a slate's candidate pool.
+**Note:** partly delivered already — T6 prices duplication through tie splitting, and `scripts/showdown_dup_report.py` reports exact-match frequency. What remains is a reusable `dup_estimate` the ledger records for every entry, and the dup penalty in selection.
 
 ### T3. Standings ingester
 Parse DK contest standings CSVs from `data/raw/standings/` into an `actual_ownership` table (slate_id, contest_id, player_id, cpt_pct, flex_pct, total_pct) plus a `contest_payouts` table from the payout column.
@@ -56,11 +61,6 @@ it — that one prices duplication against ROI rather than showing the trade by 
   Remaining: the calibration script comparing it to `actual_ownership` and reporting MAE, which
   needs T3, which needs H2 to produce a standings file. Running it on a real slate additionally
   needs H7 (no projection source exists yet).
-- **T7. Duplication model** — blocked on **H1** (the Step 0 decision), per the human-only queue.
-  Worth noting the ground has shifted: T6 already prices duplication through tie splitting, and
-  `scripts/showdown_dup_report.py` already reports exact-match frequency, so what remains of T7 is
-  recording `dup_estimate` on every ledger entry and adding a dup penalty to lineup selection.
-  Neither obviously depends on H1 — worth re-reading that dependency when H1 is answered.
 
 ## Done
 
