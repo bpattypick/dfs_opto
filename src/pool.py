@@ -16,6 +16,8 @@ import logging
 
 import pandas as pd
 
+from src.ingest.dk_salaries import parse_dk_export
+
 log = logging.getLogger(__name__)
 
 # DK will not score these, so they must never enter a pool.
@@ -125,3 +127,28 @@ def status_changes(before: pd.DataFrame, after: pd.DataFrame) -> pd.DataFrame:
         "was": old[changed].to_numpy(),
         "now": new[changed].to_numpy(),
     }).reset_index(drop=True)
+
+
+def from_export(
+    path,
+    projection_column: str = "avg_points",
+    include_unavailable: bool = False,
+) -> pd.DataFrame:
+    """Pool straight from a DK Showdown export, bypassing the database.
+
+    This is the only path available for a live slate. ``dk_salaries.load_file``
+    resolves names through the crosswalk, whose reference is built from
+    ``player_week_stats`` for the slate's own week — rows that do not exist
+    until the games have been played. Fine for backtesting a historical slate,
+    impossible for one that locks tonight (see T14).
+
+    So the ids here are DK's own, not canonical GSIS ids. That is sufficient for
+    simulating a single slate, where every component keys off the same pool, and
+    insufficient for anything joining across sources or weeks.
+    """
+    return build_pool(
+        parse_dk_export(path),
+        projection_column=projection_column,
+        id_column="source_id",
+        include_unavailable=include_unavailable,
+    )

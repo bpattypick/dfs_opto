@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -157,3 +159,47 @@ class TestAgainstTheRealExport:
         result = build_pool(parsed)
         assert len(parsed) == 10 and len(result) == 8   # Charbonnet OUT, Patriots IR
         assert set(result["team"]) == {"NE", "SEA"}
+
+
+class TestFromExport:
+    """The live-slate path: export straight to pool, no database."""
+
+    FIXTURE = Path(__file__).parent / "fixtures" / "2026-w01_dk_showdown-ne-sea.csv"
+
+    def test_builds_a_pool_from_a_showdown_export(self):
+        result = pool_mod.from_export(self.FIXTURE)
+        assert list(result.columns) == list(pool_mod.POOL_COLUMNS)
+        assert len(result) == 8              # 10 players less Charbonnet and Patriots
+        assert set(result["team"]) == {"NE", "SEA"}
+
+    def test_captain_rows_do_not_leak_into_the_pool(self):
+        # A CPT row surviving would double every player at 1.5x salary.
+        result = pool_mod.from_export(self.FIXTURE)
+        assert result["player_id"].is_unique
+        assert result.set_index("name").loc["Jaxon Smith-Njigba", "salary"] == 10600
+
+    def test_projection_comes_from_avg_points(self):
+        result = pool_mod.from_export(self.FIXTURE).set_index("name")
+        assert result.loc["Drake Maye", "projection"] == pytest.approx(20.90)
+
+    def test_unavailable_players_can_be_kept(self):
+        assert len(pool_mod.from_export(self.FIXTURE, include_unavailable=True)) == 10
+
+    def test_the_pool_drives_the_simulation_end_to_end(self):
+        # H7's actual acceptance: a real export runs T4/T5/T6 without hand-wiring.
+        from src.contest import PayoutTable, independent_normal_scores, simulate_contest
+        from src.field import generate_field
+        from src.ownership import estimate_ownership
+
+        players = pool_mod.from_export(self.FIXTURE)
+        rates = estimate_ownership(players, n=15, seed=0)
+        field = generate_field(players[["player_id", "team", "salary"]], rates,
+                               size=40, seed=1)
+        result = simulate_contest(
+            field[0], field[1:], players["player_id"].tolist(),
+            independent_normal_scores(players["projection"].to_numpy()),
+            PayoutTable.from_tiers([(1, 1, 100.0), (2, 5, 20.0)]),
+            entry_fee=5.0, trials=25, seed=2,
+        )
+        assert 0.0 <= result.cash_rate <= 1.0
+        assert result.entries == 40
