@@ -179,7 +179,8 @@ def report_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
                   SUM(COALESCE(entry_fee,0)) staked,
                   SUM(COALESCE(payout,0)) returned,
                   SUM(CASE WHEN payout > 0 THEN 1 ELSE 0 END) cashes,
-                  SUM(CASE WHEN actual_score IS NULL THEN 1 ELSE 0 END) pending
+                  SUM(CASE WHEN actual_score IS NULL THEN 1 ELSE 0 END) pending,
+                  SUM(CASE WHEN dup_estimate IS NULL THEN 1 ELSE 0 END) no_dup
            FROM entries GROUP BY contest_type, model_version
            ORDER BY contest_type, model_version"""
     ).fetchall()
@@ -227,11 +228,28 @@ def format_report(rows: Sequence[sqlite3.Row]) -> str:
         f"Cells under n={MIN_N} are directional only. GPP ROI needs hundreds of"
     )
     lines.append("entries before a difference between versions means anything.")
+
+    missing = sum(row["no_dup"] for row in rows)
+    if missing:
+        lines.append(
+            f"\n{missing} entr{'y' if missing == 1 else 'ies'} logged without a "
+            "duplication estimate — those cannot be checked against real standings."
+        )
     return "\n".join(lines)
 
 
 def cmd_add(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
     lineup = parse_lineup(args.lineup)
+    if args.dup is None and not args.no_dup:
+        # T7: an entry logged without a duplication estimate can never be
+        # checked against the contest's real standings, so the one number the
+        # Showdown strategy turns on becomes unverifiable after the fact.
+        raise LedgerError(
+            "no --dup estimate. Duplication is the Showdown edge being measured, "
+            "and an entry without it can't be checked against real standings "
+            "later. Get one from scripts/showdown_dup_report.py or "
+            "src.duplication.dup_estimate(), or pass --no-dup to log anyway."
+        )
     entry_id = add_entry(
         conn,
         slate_id=args.slate,
@@ -286,7 +304,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     a.add_argument("--sim-mean", type=float)
     a.add_argument("--sim-ceiling", type=float)
     a.add_argument("--chalk", type=float)
-    a.add_argument("--dup", type=float, help="duplication estimate (task T7)")
+    a.add_argument("--dup", type=float,
+                   help="expected identical entries (src.duplication.dup_estimate)")
+    a.add_argument("--no-dup", action="store_true",
+                   help="log without a duplication estimate (backfill)")
     a.add_argument("--date")
     a.add_argument("--allow-dirty", action="store_true")
     a.set_defaults(func=cmd_add)

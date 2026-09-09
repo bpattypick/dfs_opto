@@ -221,3 +221,33 @@ The practical lesson for reading sim output: median rank and cash rate can both
 favour the lineup that is worse to enter. ROI is the metric (CLAUDE.md principle
 5), and in a Showdown it is duplication, not projection, that most often decides
 it.
+
+## Duplication needs score variance to invert a ranking
+
+Building T7 turned up a bound on the whole Showdown strategy that is easy to
+state wrongly.
+
+Under **deterministic** scores, duplication can never make a worse lineup the
+better entry. If your lineup always outscores mine, your k copies occupy the
+ranks above me: your split share is the *average* of the top k+1 prizes, and I
+take the (k+1)th. In any decreasing payout table that average is never smaller.
+Verified across k = 1, 2, 4, 8, 12 — no inversion at any k.
+
+What actually drives the inversion is **variance**. Once scores vary, the
+less-duplicated lineup sometimes finishes above the duplicated block, and on
+those trials it keeps a prize it would otherwise have split. With a lineup only
+marginally behind the chalk (22 vs 20 projected) and 8 copies of the chalk in
+the field, the effect appears at a coefficient of variation of about 0.15 and
+grows from there.
+
+Two consequences:
+
+- **Duplication does not rescue a bad lineup.** It rewards a lineup that is
+  *close* to optimal and rarely built. The leverage play is a near-miss on
+  projection, not a contrarian punt.
+- **The size of the effect depends entirely on the score model**, which is
+  currently `independent_normal_scores` — a placeholder with a flat coefficient
+  of variation and no correlation between teammates (T13). It gets the direction
+  right, and its magnitudes should not be trusted. Real per-player variance,
+  which props would supply (H8), is what makes the dup-adjusted ROI numbers
+  quantitative rather than directional.

@@ -25,11 +25,6 @@ These block downstream tasks. Each is short.
 
 ## Ready
 
-### T7. Duplication model (contest sim 3c) — UNBLOCKED by H1
-From the field generator, estimate exact-match frequency for a candidate lineup; expose `dup_estimate`; add a dup-penalty term to lineup selection.
-**Acceptance:** `dup_estimate` recorded in the ledger for every entry; a comparison report shows dup-adjusted ROI vs raw ROI for a slate's candidate pool.
-**Note:** partly delivered already — T6 prices duplication through tie splitting, and `scripts/showdown_dup_report.py` reports exact-match frequency. What remains is a reusable `dup_estimate` the ledger records for every entry, and the dup penalty in selection.
-
 ### T3. Standings ingester
 Parse DK contest standings CSVs from `data/raw/standings/` into an `actual_ownership` table (slate_id, contest_id, player_id, cpt_pct, flex_pct, total_pct) plus a `contest_payouts` table from the payout column.
 **Acceptance:** idempotent; routes names through the crosswalk; join coverage ≥97% with a loud failure below; one test against a real archived file. *Blocked until H2 has produced at least one file.*
@@ -90,6 +85,13 @@ it — that one prices duplication against ROI rather than showing the trade by 
   (both were discarded); `salaries` gained those columns with an ALTER-based migration so existing
   databases don't hit "no such column". Classic slates are untouched — detection keys on CPT, since
   Classic has its own FLEX slot. 9 tests + a Showdown fixture.
+- **T7. Duplication model** — 2026-09-09 — `src/duplication.py`: `dup_estimate()` scales exact-match
+  frequency to the contest actually entered, `compare_duplication()` reports raw vs dup-adjusted ROI
+  per candidate (counterfactual field keeps contest size fixed by substituting, not deleting), and
+  `most_duplicated()` names the builds to differentiate from. Selection is by dup-adjusted ROI, which
+  is the dup penalty done exactly rather than as a heuristic. `python -m src.ledger add` now refuses
+  an entry without `--dup` (`--no-dup` for backfills) and the report counts entries missing it.
+  23 tests. Recorded in data-sources.md: duplication cannot invert a ranking without score variance.
 - **T12. Player status filtering** — 2026-09-09 — `src/pool.py`: `build_pool()` excludes OUT/IR
   (46 of 68 on the real slate, matching the hand filtering) and keeps Q players, who usually play and
   are often under-owned. Plus `questionable()` and `status_changes()`, the cheapest form of roadmap

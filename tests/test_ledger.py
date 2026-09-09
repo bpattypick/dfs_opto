@@ -212,6 +212,18 @@ class TestReport:
         # cash% is over settled entries only, so one-for-one reads 100%.
         assert "100%" in ledger.format_report([row])
 
+    def test_entries_missing_a_dup_estimate_are_called_out(self, conn):
+        _add(conn, entry_fee=5.0)                      # no dup_estimate
+        _add(conn, entry_fee=5.0, dup_estimate=0.02)
+        report = ledger.format_report(ledger.report_rows(conn))
+        assert "1 entry logged without a duplication estimate" in report
+
+    def test_no_callout_when_every_entry_has_one(self, conn):
+        _add(conn, entry_fee=5.0, dup_estimate=0.02)
+        assert "without a duplication estimate" not in ledger.format_report(
+            ledger.report_rows(conn)
+        )
+
     def test_small_samples_are_flagged(self, conn):
         _add(conn, entry_fee=5.0)
         assert "not conclusive" in ledger.format_report(ledger.report_rows(conn))
@@ -239,7 +251,7 @@ class TestCli:
             "--type", "showdown_gpp", "--field-size", "5000", "--fee", "5",
             "--lineup", "Drake Maye|Jaxon Smith-Njigba|AJ Barner",
             "--sim-mean", "98.8", "--sim-ceiling", "123.8", "--chalk", "134",
-            "--allow-dirty",
+            "--dup", "0.0014", "--allow-dirty",
         ])
         assert rc == 0
         assert "entry 1 logged" in capsys.readouterr().out
@@ -263,7 +275,7 @@ class TestCli:
         monkeypatch.setattr(ledger, "git_commit", refuse)
         rc = ledger.main([
             "--db", str(db_path), "add", "--slate", "s", "--type", "showdown_gpp",
-            "--lineup", "Maye|JSN",
+            "--lineup", "Maye|JSN", "--dup", "0.5",
         ])
         assert rc == 1
         assert "dirty" in capsys.readouterr().err
@@ -271,6 +283,25 @@ class TestCli:
         conn = db.connect(db_path)
         assert conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0] == 0
         conn.close()
+
+    def test_add_without_a_dup_estimate_is_refused(self, tmp_path, capsys):
+        # T7: an entry with no duplication estimate can never be checked against
+        # the contest's real standings.
+        rc = ledger.main([
+            "--db", str(tmp_path / "d.sqlite"), "add", "--slate", "s",
+            "--type", "showdown_gpp", "--lineup", "Maye|JSN", "--allow-dirty",
+        ])
+        assert rc == 1
+        assert "--dup" in capsys.readouterr().err
+
+    def test_no_dup_flag_allows_a_backfill(self, tmp_path, capsys):
+        rc = ledger.main([
+            "--db", str(tmp_path / "d.sqlite"), "add", "--slate", "s",
+            "--type", "showdown_gpp", "--lineup", "Maye|JSN", "--no-dup",
+            "--allow-dirty",
+        ])
+        assert rc == 0
+        assert "entry 1 logged" in capsys.readouterr().out
 
     def test_result_for_unknown_entry_exits_nonzero(self, tmp_path, capsys):
         rc = ledger.main([
