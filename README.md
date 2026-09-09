@@ -27,6 +27,16 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
+If `pydfs-lineup-optimizer` fails to build with
+`AttributeError: install_layout`, the environment's setuptools is shipping a
+patched `install_lib` against a vendored `_distutils` that no longer provides
+that option. It is not a problem with the pinned version — build it against the
+stdlib distutils instead:
+
+```bash
+SETUPTOOLS_USE_DISTUTILS=stdlib .venv/bin/pip install -r requirements.txt
+```
+
 ## Usage
 
 ```bash

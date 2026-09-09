@@ -111,7 +111,7 @@ exercises the rest of the pipeline.
 
 ## Schema additions
 
-Four documented departures from the spec's §3 DDL, all additive:
+Five documented departures from the spec's §3 DDL, all additive:
 
 | Table | Addition | Why |
 | --- | --- | --- |
@@ -119,7 +119,60 @@ Four documented departures from the spec's §3 DDL, all additive:
 | `player_week_stats` | `st_tds` | Return TDs are 6 real DK points; `dk_points` is wrong without it |
 | `dst_week_stats` | whole table | Team defense stats don't fit the player columns |
 | `id_crosswalk` | `match_method` values `dst_map`, `exact_name_pos` | Keeps join provenance auditable |
+| `entries` | whole table | The experiment ledger (roadmap v2 Step 1, not in the July spec) |
 
 Scored DST rows are also mirrored into `player_week_stats` under
 `player_id = 'DST_<TEAM>'` so the optimizer can treat every DK roster slot
 uniformly.
+
+## The ledger's dirty-tree guard depends on `.gitignore`
+
+`src/ledger.py` refuses to log an entry while `git status --porcelain` reports
+anything, so that every entered lineup is attributable to a commit. That check
+counts **untracked** files too, which makes it quietly dependent on
+`.gitignore` staying accurate: the DB (`data/dfs.sqlite`) and its `-wal`/`-shm`
+siblings are ignored, so ordinary pipeline runs don't trip it.
+
+If a future step writes a generated file that isn't ignored — a scratch CSV, a
+sim cache, a notebook checkpoint — every ledger write starts failing 15 minutes
+before lock, which is the worst possible time to debug it. Ignore new generated
+artifacts when you add them, not after.
+
+## The optimizer identifies players by name, not by ID
+
+`pydfs-lineup-optimizer`'s DK Showdown mode (`Site.DRAFTKINGS_CAPTAIN_MODE`)
+wants **two pool entries per player** — one with position `CPT`, one with
+`FLEX` — mirroring the two rows DK's own export gives you. Verified by running
+it: it enforces the $50,000 cap, the 1 CPT + 5 FLEX shape, and DK's
+both-teams-represented rule without extra constraints.
+
+The trap is how it keeps one person out of both slots: **it matches on the
+player's name, not on the ID you pass it.** Two different players who share a
+name would be silently collapsed into one, and one of them would never appear
+in a lineup. `src/ownership.py` passes the canonical GSIS id as the name for
+exactly this reason; the display name is rejoined afterwards. If lineups ever
+start coming back short, or a player never appears no matter the projection,
+check this first.
+
+Salaries stored in the DB are the FLEX/UTIL base, so `src/ownership.py` applies
+the 1.5x captain multiplier to both salary and points itself rather than reading
+DK's pre-multiplied CPT row.
+
+## Ownership targets are not exactly reachable in a legal field
+
+Ownership estimates are *marginal* rates — each player's share of lineups
+independently. The salary cap makes players compete for the same roster, so
+those marginals are not jointly satisfiable: sampling lineups slot by slot and
+rejecting illegal ones systematically suppresses expensive players, and the
+error plateaus around 9-13 points no matter how large the field gets. It is
+bias, not noise, so a bigger field does not fix it.
+
+`src/field.py` closes most of the gap with a repair pass that swaps over-target
+players out of lineups for under-target ones, keeping only legal results. That
+brings the residual to about 0.03 per slot for fields of 100-5,000. The
+remainder is structural.
+
+Two consequences worth remembering when Step 3 gets calibrated against real
+standings: a field that matches estimated ownership to within ~3 points is as
+good as this method gets, and any comparison of estimated to actual ownership
+inherits that floor — do not read a 2-point discrepancy as a modelling error.
