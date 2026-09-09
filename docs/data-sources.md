@@ -137,3 +137,23 @@ If a future step writes a generated file that isn't ignored — a scratch CSV, a
 sim cache, a notebook checkpoint — every ledger write starts failing 15 minutes
 before lock, which is the worst possible time to debug it. Ignore new generated
 artifacts when you add them, not after.
+
+## The optimizer identifies players by name, not by ID
+
+`pydfs-lineup-optimizer`'s DK Showdown mode (`Site.DRAFTKINGS_CAPTAIN_MODE`)
+wants **two pool entries per player** — one with position `CPT`, one with
+`FLEX` — mirroring the two rows DK's own export gives you. Verified by running
+it: it enforces the $50,000 cap, the 1 CPT + 5 FLEX shape, and DK's
+both-teams-represented rule without extra constraints.
+
+The trap is how it keeps one person out of both slots: **it matches on the
+player's name, not on the ID you pass it.** Two different players who share a
+name would be silently collapsed into one, and one of them would never appear
+in a lineup. `src/ownership.py` passes the canonical GSIS id as the name for
+exactly this reason; the display name is rejoined afterwards. If lineups ever
+start coming back short, or a player never appears no matter the projection,
+check this first.
+
+Salaries stored in the DB are the FLEX/UTIL base, so `src/ownership.py` applies
+the 1.5x captain multiplier to both salary and points itself rather than reading
+DK's pre-multiplied CPT row.

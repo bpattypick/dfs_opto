@@ -15,7 +15,8 @@ These block downstream tasks. Each is short.
 - [ ] **H3. Decide the news feed** for late-swap (RSS vs paid aggregator vs X API). Price it. Record in `docs/decisions.md`. *Blocks: T8. Due before mid-October.*
 - [ ] **H5. Decide whether the ledger needs a `results.md` view.** Roadmap Step 1 asks for a notebook/view; T1's acceptance asked for `python -m src.ledger report`, which is what was built. Confirm the CLI report is enough or spec the view. *Blocks: nothing.*
 - [ ] **H6. Set the cash/GPP allocation and stake sizing.** `CONTEST_RULES.md` R5 encodes the roadmap's shape (majority cash/single-entry, minority GPP) but not the numbers — the exact split, the per-entry stake, and whether R4 should carry a hard rake ceiling are money calls. Record in `docs/decisions.md`. *Blocks: nothing in code; R5 stays soft until answered.*
-- [ ] **H4. Vendor projection subscription** — decide yes/no and which. If yes, start archiving Thursday + Sunday exports. *Blocks: T10 only. Low urgency under current scope.*
+- [ ] **H7. Decide the projection source for Showdown slates.** The optimal-rate baseline (T4) randomizes projections, but nothing populates the `projections` table and the DK salary parser discards `AvgPointsPerGame`, so there is no projection input on a real slate today. Cheapest interim fix is retaining `AvgPointsPerGame` in the salaries ingest — free, already in every export — but for backtests it must be the value archived pre-lock, not a later file, or it breaks the leakage guarantee. Confirm the interim source, or answer H4. *Blocks: running T4 and T5 on real data (unit tests are unaffected).*
+- [ ] **H4. Vendor projection subscription** — decide yes/no and which. If yes, start archiving Thursday + Sunday exports. *Blocks: T10, and is one answer to H7. Low urgency only if H7 is settled another way.*
 
 **Resolved:** paid contest entry from home is confirmed working — real-money entries are on the table, so the ledger's ROI numbers are live money, not paper.
 
@@ -26,10 +27,6 @@ These block downstream tasks. Each is short.
 ### T3. Standings ingester
 Parse DK contest standings CSVs from `data/raw/standings/` into an `actual_ownership` table (slate_id, contest_id, player_id, cpt_pct, flex_pct, total_pct) plus a `contest_payouts` table from the payout column.
 **Acceptance:** idempotent; routes names through the crosswalk; join coverage ≥97% with a loud failure below; one test against a real archived file. *Blocked until H2 has produced at least one file.*
-
-### T4. Optimal-rate ownership baseline
-Implement the baseline described in the roadmap Step 3a: run the optimizer N times over lightly randomized projections, count player appearance rate. This is the zero-cost ownership estimate everything else must beat.
-**Acceptance:** `estimate_ownership(pool, n=1000)` returns per-player CPT and FLEX rates; a calibration script compares its output to `actual_ownership` for any slate that has standings, reporting MAE. *Partially blocked: calibration needs T3, but the estimator itself can be built and tested now.*
 
 ### T5. Field generator (contest sim 3a)
 Given ownership estimates, sample N plausible opponent lineups respecting salary cap, Showdown roster rules (1 CPT + 5 FLEX, both teams represented), and target ownership rates.
@@ -54,6 +51,12 @@ From the field generator, estimate exact-match frequency for a candidate lineup;
 ## Blocked
 
 *(move tasks here with a one-line reason; check each session whether the blocker cleared)*
+
+- **T4. Optimal-rate ownership baseline** — estimator half is done and committed
+  (`src/ownership.py`, `estimate_ownership(pool, n=1000)` returning CPT/FLEX/total rates, 23 tests).
+  Remaining: the calibration script comparing it to `actual_ownership` and reporting MAE, which
+  needs T3, which needs H2 to produce a standings file. Running it on a real slate additionally
+  needs H7 (no projection source exists yet).
 
 ## Done
 
