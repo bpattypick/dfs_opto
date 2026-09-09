@@ -41,8 +41,11 @@ log = logging.getLogger(__name__)
 SOURCE = "dk"
 
 # 2026-w01_dk_main.csv -> season 2026, week 1, slate 'main'
+# Hyphens are allowed in the slate so a Showdown can name its game
+# (2026-w01_dk_showdown-ne-sea.csv). Without that, every Showdown in a week
+# collapses to the same slate_id and the second one overwrites the first.
 FILENAME_RE = re.compile(
-    r"^(?P<season>\d{4})-w(?P<week>\d{1,2})_dk_(?P<slate>[a-z0-9]+)\.csv$",
+    r"^(?P<season>\d{4})-w(?P<week>\d{1,2})_dk_(?P<slate>[a-z0-9][a-z0-9-]*)\.csv$",
     re.IGNORECASE,
 )
 

@@ -176,3 +176,28 @@ Two consequences worth remembering when Step 3 gets calibrated against real
 standings: a field that matches estimated ownership to within ~3 points is as
 good as this method gets, and any comparison of estimated to actual ownership
 inherits that floor — do not read a 2-point discrepancy as a modelling error.
+
+## DK Showdown export: verified against a real slate
+
+From the 2026-w01 NE@SEA export (68 players, 136 rows):
+
+- **Two rows per player**, one `CPT` and one `FLEX`, no exceptions.
+- **CPT salary is exactly 1.5x the FLEX salary**, for all 68 — confirming the
+  convention of storing the FLEX base and applying the multiplier in code.
+- **The file is sorted by salary descending**, so a player's CPT row always
+  precedes their FLEX row. This is load-bearing by accident: `salaries` is keyed
+  `(slate_id, dk_name)`, so loading a Showdown export upserts both rows onto one
+  key and the *last* one wins. Today that is FLEX, which is correct. If DK ever
+  changes the sort, every Showdown salary silently becomes 1.5x too high. See
+  T11.
+- **`Status` marks OUT / IR / Q** — 22 of 68 players were OUT or IR on this
+  slate. A pool built without filtering them will happily build lineups around
+  players who never take the field. It is also the free late-swap signal roadmap
+  Step 4 asks for: it is already in the export, no news feed required.
+- **`AvgPointsPerGame` is populated** and is a usable interim projection, but in
+  Week 1 it carries *last season's* average — 16 of the 46 playable players had
+  zero. Fine for a duplication-aware baseline, weak as a projection.
+
+Raw archives are gitignored (`data/raw/**`), so an archived export lives only on
+the machine that downloaded it. Keep your own copy; a fresh clone will not have
+it.

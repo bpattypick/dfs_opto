@@ -29,6 +29,13 @@ class TestFilenameConvention:
         meta = dk_salaries.parse_slate_filename("2025-w12_dk_showdown.csv")
         assert meta["slate"] == "showdown"
 
+    def test_a_showdown_can_name_its_game(self):
+        # Every Showdown in a week would otherwise share one slate_id, and the
+        # second file loaded would overwrite the first.
+        meta = dk_salaries.parse_slate_filename("2026-w01_dk_showdown-ne-sea.csv")
+        assert meta["slate"] == "showdown-ne-sea"
+        assert meta["slate_id"] == "2026-w01-showdown-ne-sea"
+
     @pytest.mark.parametrize(
         "bad",
         ["dk_main.csv", "2026-week1_dk_main.csv", "2026-w01_main.csv", "salaries.csv"],
