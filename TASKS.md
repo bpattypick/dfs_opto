@@ -28,10 +28,6 @@ These block downstream tasks. Each is short.
 Parse DK contest standings CSVs from `data/raw/standings/` into an `actual_ownership` table (slate_id, contest_id, player_id, cpt_pct, flex_pct, total_pct) plus a `contest_payouts` table from the payout column.
 **Acceptance:** idempotent; routes names through the crosswalk; join coverage ≥97% with a loud failure below; one test against a real archived file. *Blocked until H2 has produced at least one file.*
 
-### T5. Field generator (contest sim 3a)
-Given ownership estimates, sample N plausible opponent lineups respecting salary cap, Showdown roster rules (1 CPT + 5 FLEX, both teams represented), and target ownership rates.
-**Acceptance:** generates a field of arbitrary size; realized player ownership in the generated field matches input estimates within a stated tolerance; test asserts every generated lineup is DK-legal.
-
 ### T6. Placement + ROI (contest sim 3b)
 For each Monte Carlo trial: score the generated field and the candidate lineup, rank, map to the saved payout structure, accumulate payout.
 **Acceptance:** returns expected ROI, cash rate, and top-1% rate for a candidate lineup given a contest size + payout table; test with a synthetic payout structure where the correct answer is hand-computable.
@@ -71,3 +67,7 @@ From the field generator, estimate exact-match frequency for a candidate lineup;
   R4 effective rake + overlay, R5 allocation, R6 human enters, R7 logged before lock), plus a
   deviation-recording convention. Doc only, no modeling. Raised H6 (the allocation numbers are a
   money call, so R5 is deliberately soft).
+- **T5. Field generator** — 2026-09-09 — `src/field.py` samples DK-legal opponent lineups matching
+  target ownership, plus `src/showdown.py` holding the shared roster rules (cap, 1 CPT + 5 FLEX,
+  both teams, `Lineup.key()` for T7 duplication). Deficit-weighted sampling plus a legality-preserving
+  repair pass; realized ownership within ~0.03 per slot, stated tolerance 0.05 in tests. 24 tests.

@@ -25,12 +25,13 @@ import pandas as pd
 from pydfs_lineup_optimizer import Player, Site, Sport, get_optimizer
 from pydfs_lineup_optimizer.exceptions import GenerateLineupException
 
-# DK Showdown: the captain slot costs 1.5x salary and scores 1.5x points.
-# Stored salaries are the FLEX/UTIL base (CLAUDE.md conventions), so the
-# multiplier is applied here rather than read off the CPT row.
-CAPTAIN_MULTIPLIER = 1.5
+from src import showdown
 
-ROSTER_SIZE = 6  # 1 CPT + 5 FLEX
+# DK Showdown roster rules live in src/showdown.py so the sim pieces cannot
+# drift apart on them; re-exported here for callers already importing them.
+CAPTAIN_MULTIPLIER = showdown.CAPTAIN_MULTIPLIER
+ROSTER_SIZE = showdown.ROSTER_SIZE
+
 REQUIRED_COLUMNS = ("player_id", "name", "team", "salary", "projection")
 
 

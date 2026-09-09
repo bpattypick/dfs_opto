@@ -157,3 +157,22 @@ check this first.
 Salaries stored in the DB are the FLEX/UTIL base, so `src/ownership.py` applies
 the 1.5x captain multiplier to both salary and points itself rather than reading
 DK's pre-multiplied CPT row.
+
+## Ownership targets are not exactly reachable in a legal field
+
+Ownership estimates are *marginal* rates — each player's share of lineups
+independently. The salary cap makes players compete for the same roster, so
+those marginals are not jointly satisfiable: sampling lineups slot by slot and
+rejecting illegal ones systematically suppresses expensive players, and the
+error plateaus around 9-13 points no matter how large the field gets. It is
+bias, not noise, so a bigger field does not fix it.
+
+`src/field.py` closes most of the gap with a repair pass that swaps over-target
+players out of lineups for under-target ones, keeping only legal results. That
+brings the residual to about 0.03 per slot for fields of 100-5,000. The
+remainder is structural.
+
+Two consequences worth remembering when Step 3 gets calibrated against real
+standings: a field that matches estimated ownership to within ~3 points is as
+good as this method gets, and any comparison of estimated to actual ownership
+inherits that floor — do not read a 2-point discrepancy as a modelling error.
