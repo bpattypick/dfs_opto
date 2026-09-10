@@ -284,6 +284,26 @@ class TestCli:
         assert conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0] == 0
         conn.close()
 
+    def test_a_variant_contest_type_is_refused(self, tmp_path, capsys):
+        # "gpp" and "showdown_gpp" are one contest to a human and two rows to
+        # SQL, which silently halves progress toward the season metric.
+        rc = ledger.main([
+            "--db", str(tmp_path / "d.sqlite"), "add", "--slate", "s",
+            "--type", "gpp", "--lineup", "Maye|JSN", "--dup", "2",
+            "--allow-dirty",
+        ])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "showdown_gpp" in err and "neither reaches N" in err
+
+    def test_force_type_allows_a_genuinely_new_type(self, tmp_path, capsys):
+        rc = ledger.main([
+            "--db", str(tmp_path / "d.sqlite"), "add", "--slate", "s",
+            "--type", "showdown_satellite", "--lineup", "Maye|JSN", "--dup", "2",
+            "--force-type", "--allow-dirty",
+        ])
+        assert rc == 0
+
     def test_add_without_a_dup_estimate_is_refused(self, tmp_path, capsys):
         # T7: an entry with no duplication estimate can never be checked against
         # the contest's real standings.

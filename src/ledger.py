@@ -48,6 +48,18 @@ MIN_N = 50
 # model_version for entries backfilled outside a git checkout.
 NO_GIT = "no-git"
 
+# The success metric counts entries per contest_type x model_version cell, so a
+# typo or an abbreviation silently splits one cell into two and neither reaches
+# N. "gpp" and "showdown_gpp" are the same contest to a human and two different
+# rows to SQL. Format x structure only — single-entry vs 3-max is a CONTEST_RULES
+# R2 property of the contest, not a type of contest.
+CONTEST_TYPES = (
+    "showdown_gpp",
+    "showdown_cash",
+    "classic_gpp",
+    "classic_cash",
+)
+
 # Roadmap Step 0 asks for the season's success metric at the top of the ledger,
 # so it is read every time results are, rather than remembered. Set by H1 —
 # see docs/decisions.md for the reasoning and what follows from it.
@@ -240,6 +252,13 @@ def format_report(rows: Sequence[sqlite3.Row]) -> str:
 
 def cmd_add(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
     lineup = parse_lineup(args.lineup)
+    if args.type not in CONTEST_TYPES and not args.force_type:
+        raise LedgerError(
+            f"contest type {args.type!r} is not one of {', '.join(CONTEST_TYPES)}. "
+            "The season metric counts entries per contest type, so a variant "
+            "spelling splits one cell into two and neither reaches N. "
+            "--force-type to add a genuinely new type."
+        )
     if args.dup is None and not args.no_dup:
         # T7: an entry logged without a duplication estimate can never be
         # checked against the contest's real standings, so the one number the
@@ -296,7 +315,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     a = sub.add_parser("add", help="log an entry before the contest locks")
     a.add_argument("--slate", required=True)
     a.add_argument("--contest")
-    a.add_argument("--type", required=True, help="showdown_gpp / showdown_cash / ...")
+    a.add_argument("--type", required=True,
+                   help=f"one of: {', '.join(CONTEST_TYPES)}")
+    a.add_argument("--force-type", action="store_true",
+                   help="accept a contest type outside the canonical list")
     a.add_argument("--field-size", type=int)
     a.add_argument("--fee", type=float)
     a.add_argument("--payout-structure", help="id of saved payout table")
