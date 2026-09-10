@@ -7,7 +7,8 @@ import subprocess
 
 import pytest
 
-from src import db, ledger
+from src import db as db_mod, ledger
+db = db_mod
 
 
 @pytest.fixture
@@ -224,6 +225,31 @@ class TestReport:
             ledger.report_rows(conn)
         )
 
+    def test_manual_entries_do_not_count_toward_the_metric(self, conn):
+        # H1's metric is entries "attributable to a commit". A hand-built lineup
+        # is a legitimate ROI data point and no model can be credited for it.
+        for _ in range(3):
+            _add(conn, model_version=ledger.MANUAL, entry_fee=5.0, dup_estimate=2)
+        report = ledger.format_report(ledger.report_rows(conn))
+        assert f"Progress: 0/{ledger.MIN_N}" in report
+        assert "no entries are attributable to a commit" in report
+        assert "[no commit]" in report
+
+    def test_unattributed_entries_are_excluded_but_disclosed(self, conn):
+        _add(conn, model_version="abc1234", entry_fee=5.0, dup_estimate=2)
+        _add(conn, model_version=ledger.MANUAL, entry_fee=5.0, dup_estimate=2)
+        report = ledger.format_report(ledger.report_rows(conn))
+        assert f"Progress: 1/{ledger.MIN_N}" in report
+        assert "1 further entry not attributable" in report
+
+    @pytest.mark.parametrize(("version", "ok"), [
+        ("abc1234", True), ("4b221390a1b2c3", True),
+        ("abc1234-dirty", False), (ledger.MANUAL, False), (ledger.NO_GIT, False),
+        ("chat-session-heuristic-sim-no-git-hash", False), ("", False), (None, False),
+    ])
+    def test_what_counts_as_commit_attributable(self, version, ok):
+        assert ledger.is_attributable(version) is ok
+
     def test_small_samples_are_flagged(self, conn):
         _add(conn, entry_fee=5.0)
         assert "not conclusive" in ledger.format_report(ledger.report_rows(conn))
@@ -295,6 +321,22 @@ class TestCli:
         assert rc == 1
         err = capsys.readouterr().err
         assert "showdown_gpp" in err and "neither reaches N" in err
+
+    def test_model_version_override_skips_the_git_check(self, tmp_path, capsys):
+        # A hand-built lineup has no commit to point at; stamping the checked-out
+        # one would credit code that had no part in it.
+        db = tmp_path / "d.sqlite"
+        rc = ledger.main([
+            "--db", str(db), "add", "--slate", "s", "--type", "showdown_gpp",
+            "--lineup", "Maye|JSN", "--dup", "2",
+            "--model-version", ledger.MANUAL,
+        ])
+        assert rc == 0
+        conn = db_mod.connect(db)
+        assert conn.execute("SELECT model_version FROM entries").fetchone()[0] == (
+            ledger.MANUAL
+        )
+        conn.close()
 
     def test_force_type_allows_a_genuinely_new_type(self, tmp_path, capsys):
         rc = ledger.main([

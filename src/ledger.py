@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import subprocess
 import sys
@@ -47,6 +48,22 @@ MIN_N = 50
 
 # model_version for entries backfilled outside a git checkout.
 NO_GIT = "no-git"
+
+# model_version for a lineup a human built rather than code. A legitimate case
+# — the first entries predate the pipeline — but it must stay distinguishable
+# rather than be stamped with whatever commit happened to be checked out, which
+# would attribute the lineup to code that had no part in it.
+MANUAL = "manual"
+
+# H1's metric counts entries "attributable to a commit". A clean short hash
+# qualifies; MANUAL, NO_GIT and anything tagged "-dirty" do not, so progress is
+# not flattered by entries no model can be held responsible for.
+_COMMIT_HASH = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def is_attributable(model_version: str) -> bool:
+    """Whether this entry can be credited to a specific commit."""
+    return bool(_COMMIT_HASH.match(str(model_version or "")))
 
 # The success metric counts entries per contest_type x model_version cell, so a
 # typo or an abbreviation silently splits one cell into two and neither reaches
@@ -198,28 +215,10 @@ def report_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def format_report(rows: Sequence[sqlite3.Row]) -> str:
-    header = [SUCCESS_METRIC, ""]
-    if not rows:
-        return "\n".join(header + ["No entries logged yet."])
-
-    # Progress against the metric is the closest cell to N, not the total:
-    # entries spread across contest types never produce a conclusion.
-    best = max(rows, key=lambda r: r["n"])
-    if best["n"] >= MIN_N:
-        header.append(
-            f"At N: {best['contest_type']} has {best['n']} entries on "
-            f"{best['model_version']}."
-        )
-    else:
-        header.append(
-            f"Progress: {best['n']}/{MIN_N} in {best['contest_type']} "
-            f"({best['model_version']}) — the closest cell to a conclusion."
-        )
-    header.append("")
-
-    lines = header + [
-        f"{'contest_type':<20}{'version':<14}{'n':>5}{'staked':>9}{'returned':>10}"
+def _table(rows: Sequence[sqlite3.Row]) -> list[str]:
+    """The per-cell ROI table, without the header block."""
+    lines = [
+        f"{'contest_type':<20}{'version':<16}{'n':>5}{'staked':>9}{'returned':>10}"
         f"{'ROI':>9}{'cash%':>8}{'pend':>6}"
     ]
     for row in rows:
@@ -229,10 +228,12 @@ def format_report(rows: Sequence[sqlite3.Row]) -> str:
         net_roi = ((returned - staked) / staked) if staked else None
         roi_s = f"{net_roi:+.1%}" if net_roi is not None else "n/a"
         cash_s = f"{row['cashes'] / settled:.0%}" if settled else "n/a"
-        flag = "" if n >= MIN_N else "  <- small sample, not conclusive"
+        marks = "" if n >= MIN_N else "  <- small sample, not conclusive"
+        if not is_attributable(row["model_version"]):
+            marks += "  [no commit]"
         lines.append(
-            f"{row['contest_type']:<20}{row['model_version']:<14}{n:>5}"
-            f"{staked:>9.2f}{returned:>10.2f}{roi_s:>9}{cash_s:>8}{pending:>6}{flag}"
+            f"{row['contest_type']:<20}{row['model_version'][:15]:<16}{n:>5}"
+            f"{staked:>9.2f}{returned:>10.2f}{roi_s:>9}{cash_s:>8}{pending:>6}{marks}"
         )
 
     lines.append("")
@@ -247,7 +248,47 @@ def format_report(rows: Sequence[sqlite3.Row]) -> str:
             f"\n{missing} entr{'y' if missing == 1 else 'ies'} logged without a "
             "duplication estimate — those cannot be checked against real standings."
         )
-    return "\n".join(lines)
+    return lines
+
+
+def format_report(rows: Sequence[sqlite3.Row]) -> str:
+    header = [SUCCESS_METRIC, ""]
+    if not rows:
+        return "\n".join(header + ["No entries logged yet."])
+
+    # Progress against the metric is the closest *attributable* cell to N. The
+    # total would flatter it twice over: entries spread across contest types
+    # never produce a conclusion, and entries no commit built cannot be credited
+    # to a model however well they did.
+    attributable = [r for r in rows if is_attributable(r["model_version"])]
+    unattributed = sum(r["n"] for r in rows if not is_attributable(r["model_version"]))
+
+    if not attributable:
+        note = f"Progress: 0/{MIN_N} — no entries are attributable to a commit"
+        if unattributed:
+            note += (f" ({unattributed} logged from manual or uncommitted "
+                     "lineups, which cannot be credited to a model)")
+        header += [note + ".", ""]
+        return "\n".join(header + _table(rows))
+
+    best = max(attributable, key=lambda r: r["n"])
+    if best["n"] >= MIN_N:
+        header.append(
+            f"At N: {best['contest_type']} has {best['n']} entries on "
+            f"{best['model_version']}."
+        )
+    else:
+        header.append(
+            f"Progress: {best['n']}/{MIN_N} in {best['contest_type']} "
+            f"({best['model_version']}) — the closest cell to a conclusion."
+        )
+    if unattributed:
+        header.append(
+            f"({unattributed} further entr{'y' if unattributed == 1 else 'ies'} "
+            "not attributable to a commit — excluded from that count.)"
+        )
+    header.append("")
+    return "\n".join(header + _table(rows))
 
 
 def cmd_add(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
@@ -274,7 +315,7 @@ def cmd_add(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
         slate_id=args.slate,
         contest_type=args.type,
         lineup=lineup,
-        model_version=git_commit(args.allow_dirty),
+        model_version=args.model_version or git_commit(args.allow_dirty),
         entry_date=args.date,
         contest_id=args.contest,
         field_size=args.field_size,
@@ -332,6 +373,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                    help="log without a duplication estimate (backfill)")
     a.add_argument("--date")
     a.add_argument("--allow-dirty", action="store_true")
+    a.add_argument("--model-version",
+                   help=f"override for a lineup not built by committed code, "
+                        f"e.g. {MANUAL!r}; skips the git check")
     a.set_defaults(func=cmd_add)
 
     r = sub.add_parser("result", help="settle an entry after the contest")
