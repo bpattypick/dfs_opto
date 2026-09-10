@@ -290,3 +290,50 @@ standings answer.
 
 Until then, treat duplication output as directionally useful and quantitatively
 unanchored — including T6's dup-adjusted ROI, which inherits it.
+
+## Calibration against real standings: 2026-w01 NE@SEA, 2,373 entries
+
+The first real contest standings, and they settle several open questions.
+
+**`jitter` should be ~0.5, not 0.15.** Mean absolute error against real total
+ownership, over all players in the pool:
+
+| jitter | MAE (pts) | JSN | Maye | Stevenson |
+| --- | --- | --- | --- | --- |
+| real | — | 71.7 | 76.3 | 63.7 |
+| 0.15 | 9.4 | 96.8 | 95.5 | 22.5 |
+| 0.30 | 6.9 | 84.2 | 86.8 | 38.7 |
+| **0.50** | **5.7** | **71.2** | **75.2** | 42.5 |
+| 0.80 | 6.1 | 61.0 | 66.5 | 44.0 |
+
+At 0.5 the top two players land within a point of reality. The old default was
+25 points high on both.
+
+**The marginal sampler cannot reproduce a real field, and this is now measured
+rather than suspected.** Real fields are simultaneously *diverse* and
+*clustered*:
+
+| | distinct lineups | most-entered build |
+| --- | --- | --- |
+| real | 61.5% | 1.10% (26 of 2,373) |
+| jitter 0.30 | 38.9% | 0.82% |
+| jitter 0.50 | 65.7% | 0.18% |
+
+The jitter that matches diversity understates duplication about 6x, and the one
+that gets closer on duplication is far too concentrated. No single value does
+both, exactly as T15 predicted — the field needs an explicit chalk-cluster
+component (a share of entrants converging on the same few builds) layered on a
+diffuse sampler, not a better parameter.
+
+**The dominant error is the projection, not the field.** `AvgPointsPerGame`
+rated Jadarian Price at 0.0; the real field rostered him **48.1%** of the time.
+He was Seattle's starting back with Charbonnet and Henderson both OUT, which
+last season's average cannot know. The model gives him 0% ownership at every
+jitter value, so no amount of field tuning recovers him. Elijah Arroyo (2.71
+projected) appears in the single most-entered build. Every player whose role
+changed since last season is invisible in the same way, and on this slate that
+was the highest-owned value play on the board.
+
+**One thing the model got exactly right:** the logged `dup_estimate` of 2 for
+the entered lineup matched the standings exactly — 2 identical entries, tied at
+rank 365. n=1, so that is encouraging rather than evidence.
