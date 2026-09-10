@@ -14,6 +14,7 @@ paths:
   raw_odds: data/raw/odds
   raw_nflverse: data/raw/nflverse
   manual_overrides: data/manual_overrides.csv
+  projection_overrides: data/projection_overrides.csv
   unmatched_review: data/unmatched_review.csv
 
 seasons:

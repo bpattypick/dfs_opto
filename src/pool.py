@@ -152,3 +152,58 @@ def from_export(
         id_column="source_id",
         include_unavailable=include_unavailable,
     )
+
+
+OVERRIDE_COLUMNS = ("slate_id", "dk_name", "projection", "reason")
+
+
+def load_overrides(path, slate_id: str) -> pd.DataFrame:
+    """Hand-set projections for one slate, from a tracked CSV.
+
+    `AvgPointsPerGame` is blind to role changes — it rated Seattle's starting
+    back 0.0 on a slate where the field owned him 48% (docs/data-sources.md).
+    No amount of field modelling recovers a player the projection scores at
+    zero, so the owner's read has to enter somewhere, and it enters here:
+    committed, reviewable, and attributable to a commit like any other input.
+
+    ``reason`` is required. An override without one is indistinguishable from a
+    typo six weeks later, and the ledger's whole premise is that inputs stay
+    recoverable.
+    """
+    frame = pd.read_csv(path)
+    missing = sorted(set(OVERRIDE_COLUMNS) - set(frame.columns))
+    if missing:
+        raise PoolError(f"{path}: override file is missing columns {missing}")
+    frame = frame[frame["slate_id"].astype(str) == slate_id]
+    blank = frame[frame["reason"].isna() | (frame["reason"].astype(str).str.strip() == "")]
+    if len(blank):
+        raise PoolError(
+            f"{path}: overrides without a reason: {blank['dk_name'].tolist()}"
+        )
+    return frame.reset_index(drop=True)
+
+
+def apply_overrides(pool: pd.DataFrame, overrides: pd.DataFrame) -> pd.DataFrame:
+    """Replace projections for the named players. Fails loudly on a bad name.
+
+    A misspelled name would otherwise silently do nothing, leaving the caller
+    believing an override took effect — which is worse than no override, because
+    the lineup then looks reviewed when it is not.
+    """
+    if overrides is None or overrides.empty:
+        return pool
+    out = pool.copy()
+    known = set(out["name"])
+    unknown = [n for n in overrides["dk_name"] if n not in known]
+    if unknown:
+        raise PoolError(
+            f"override names not in the pool: {unknown}. Check the spelling "
+            "against the DK export, or whether the player is OUT/IR."
+        )
+    for _, row in overrides.iterrows():
+        mask = out["name"] == row["dk_name"]
+        was = out.loc[mask, "projection"].iloc[0]
+        out.loc[mask, "projection"] = float(row["projection"])
+        log.info("override %s: %.1f -> %.1f (%s)", row["dk_name"], was,
+                 float(row["projection"]), row["reason"])
+    return out

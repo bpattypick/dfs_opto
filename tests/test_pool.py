@@ -203,3 +203,58 @@ class TestFromExport:
         )
         assert 0.0 <= result.cash_rate <= 1.0
         assert result.entries == 40
+
+
+class TestProjectionOverrides:
+    """The owner's read on role changes, committed so it is attributable."""
+
+    def write(self, tmp_path, rows, header=True):
+        path = tmp_path / "ov.csv"
+        lines = ["slate_id,dk_name,projection,reason"] if header else ["slate_id,dk_name"]
+        lines += rows
+        path.write_text("\n".join(lines) + "\n")
+        return path
+
+    def test_replaces_the_projection(self, tmp_path):
+        path = self.write(tmp_path, ['s1,Drake Maye,30.0,"owner: new role"'])
+        ov = pool_mod.load_overrides(path, "s1")
+        result = pool_mod.apply_overrides(build_pool(salaries()), ov).set_index("name")
+        assert result.loc["Drake Maye", "projection"] == 30.0
+        # untouched players keep theirs
+        assert result.loc["Jason Myers", "projection"] == pytest.approx(11.95)
+
+    def test_only_the_named_slate_applies(self, tmp_path):
+        path = self.write(tmp_path, ['other,Drake Maye,30.0,"owner: note"'])
+        ov = pool_mod.load_overrides(path, "s1")
+        assert ov.empty
+        result = pool_mod.apply_overrides(build_pool(salaries()), ov).set_index("name")
+        assert result.loc["Drake Maye", "projection"] == pytest.approx(20.90)
+
+    def test_a_misspelled_name_fails_loudly(self, tmp_path):
+        # Silently doing nothing would leave a lineup looking reviewed when the
+        # override never took effect.
+        path = self.write(tmp_path, ['s1,Drake May,30.0,"owner: typo"'])
+        ov = pool_mod.load_overrides(path, "s1")
+        with pytest.raises(PoolError, match="not in the pool"):
+            pool_mod.apply_overrides(build_pool(salaries()), ov)
+
+    def test_an_override_without_a_reason_is_refused(self, tmp_path):
+        # Six weeks later an unexplained override is indistinguishable from a bug.
+        path = self.write(tmp_path, ['s1,Drake Maye,30.0,'])
+        with pytest.raises(PoolError, match="without a reason"):
+            pool_mod.load_overrides(path, "s1")
+
+    def test_missing_columns_are_named(self, tmp_path):
+        path = self.write(tmp_path, ["s1,Drake Maye"], header=False)
+        with pytest.raises(PoolError, match="missing columns"):
+            pool_mod.load_overrides(path, "s1")
+
+    def test_no_overrides_is_a_no_op(self):
+        base = build_pool(salaries())
+        pd.testing.assert_frame_equal(pool_mod.apply_overrides(base, None), base)
+
+    def test_the_committed_overrides_file_loads(self):
+        from src import config as config_mod
+        path = config_mod.load().path("projection_overrides")
+        rows = pool_mod.load_overrides(path, "2026-w01-showdown-sf-lar")
+        assert "De'Zhaun Stribling" in set(rows["dk_name"])
