@@ -337,3 +337,27 @@ was the highest-owned value play on the board.
 **One thing the model got exactly right:** the logged `dup_estimate` of 2 for
 the entered lineup matched the standings exactly — 2 identical entries, tied at
 rank 365. n=1, so that is encouraging rather than evidence.
+
+## Minimum-priced players break the optimizer's value ratio
+
+The mirror image of the role-change problem. DK prices a player at $200-$300 to
+say *he will not play*. `AvgPointsPerGame` sometimes gives such a player a small
+non-zero average from garbage-time snaps, and the ratio explodes: on the
+2026-w01 SF@LAR slate Xavier Smith read $200 and 2.5 projected — **12.5 points
+per $1,000**, five times the best real play on the board. The optimizer reached
+for a player at or below $1,000 in 23% of runs and put one in the top-projection
+lineup.
+
+So the projection is wrong in both directions, for opposite reasons:
+
+- **role changes make it too low** (Jadarian Price, 0.0 projected, 48.1% owned)
+- **minimum pricing makes the value ratio too high** (Xavier Smith, 12.5 pts/$1k
+  for a player DK has priced as inactive)
+
+A salary floor around $1,200 removes the second class without touching any real
+contributor — the cheapest genuine plays on that slate were a $1,400 fullback
+and a $2,600 tight end. It is a blunt instrument and it works because DK's
+pricing carries the information the projection lacks: the salary *is* the
+market's playing-time estimate, which is exactly what a prior-season average
+cannot see. Worth preferring over hand-zeroing individual players, which does
+not generalise to next week's slate.
