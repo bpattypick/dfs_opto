@@ -252,38 +252,41 @@ Two consequences:
   which props would supply (H8), is what makes the dup-adjusted ROI numbers
   quantitative rather than directional.
 
-## The field generator cannot produce realistic ownership AND duplication
+## `jitter` controls the simulated field, and its default was a guess
 
-The `jitter` parameter on `estimate_ownership` was documented as "lightly
-randomized projections" and defaulted to 0.15. That default was a guess, never
-calibrated, and it turns out to control the single most important property of
-the simulated field. On the 2026-w01 NE@SEA pool:
+The `jitter` parameter on `estimate_ownership` defaulted to 0.15, documented as
+"a reasonable light default". It was never calibrated, and it turns out to
+govern the most important property of the simulated field. On the 2026-w01
+NE@SEA pool (46 playable, 5,000-entry field):
 
-| jitter | top player's ownership | distinct builds / 400 |
-| --- | --- | --- |
-| 0.15 | 96.3% | 144 |
-| 0.30 | 83.7% | 292 |
-| 0.50 | 71.3% | 368 |
-| 0.80 | 61.0% | 383 |
-| 1.20 | 52.3% | 397 |
+| jitter | top player owned | distinct lineups / 5,000 | chalk build |
+| --- | --- | --- | --- |
+| 0.15 | 96.8% | 746 | 4.76% |
+| 0.30 | 84.2% | 1,943 | 0.82% |
+| 0.50 | 71.2% | 3,284 | 0.18% |
+| 0.80 | 61.0% | 4,042 | 0.08% |
 
-96% ownership for one player is not a real field, so 0.15 is clearly wrong. But
-raising it destroys the duplication signal — in a 1,500-entry field the top
-build appears 4.73% of the time at jitter 0.15 and **0.07%** at 0.50, the same
-rate as a deliberately differentiated lineup. The leverage edge measured at the
-default disappears entirely at any plausible setting.
+96% ownership for one player is not a real field, so 0.15 is wrong and every
+duplication figure produced at it is inflated. But the signal does **not**
+disappear at plausible settings, which an earlier revision of this note claimed:
 
-**This is structural, not a tuning problem.** The generator samples lineups to
-match *marginal* ownership — each player's individual rate. Real duplication is
-a *joint* property: many entrants independently converging on the same specific
-combination. Marginals do not encode joint structure, so the generator can only
-manufacture duplication by making the entire field near-identical, which also
-produces the absurd 96% marginal. Real contests have diffuse ownership *and*
-meaningful duplication at the same time; this model cannot represent both.
+| jitter | chalk build | differentiated build | ratio |
+| --- | --- | --- | --- |
+| 0.30 | 0.82% (~41 of 5,000) | 0.14% (~7) | 5.9x |
+| 0.50 | 0.18% (~9 of 5,000) | 0.02% (~1) | 9.0x |
 
-Everything downstream inherits it. T6's ROI comparison and T7's dup-adjusted
-ranking are arithmetically correct and are being fed a field that misrepresents
-the quantity they turn on. Treat duplication output as unvalidated in both
-directions until real standings say where reality sits — that measurement (H2)
-is what distinguishes "tune jitter" from "the generator needs joint structure",
-and no amount of further modelling settles it from the inside.
+So duplication is real and worth modelling; the magnitude at the old default was
+roughly 8x too large.
+
+**Two methodology traps, both hit while measuring this.** Duplication is a
+rare-event rate, so a field must be large enough to resolve it — a 1,500-entry
+test put both builds at ~1 copy and made a genuine 9x difference look like 1.0x.
+And the whole curve is a modelling artefact until real standings anchor it:
+matching *marginal* ownership is not obviously enough to reproduce duplication,
+which is a *joint* property of many entrants converging on one combination.
+Whether the marginal sampler is adequate, or the field needs an explicit
+chalk-cluster component, is an empirical question (T15) that only real contest
+standings answer.
+
+Until then, treat duplication output as directionally useful and quantitatively
+unanchored — including T6's dup-adjusted ROI, which inherits it.
