@@ -561,6 +561,24 @@ should distinguish a *calibration* step (criterion: bias by decile near zero,
 rank preserved) from a *prediction* step (criterion: MAE and Spearman); v1 and
 v3 were held to the wrong one of those.
 
+**v3 by decile — the claim, measured.**
+
+| decile | baseline bias | v3 bias |
+| --- | --- | --- |
+| 1 (lowest projections) | -0.98 | +0.32 |
+| 5 | +0.29 | +0.17 |
+| 10 (highest) | +1.44 | -0.31 |
+| top 5% | **+2.03** | **-0.19** |
+| top 5%, week 1 | **+2.50** | **+0.91** |
+
+The baseline's bias is a monotone ramp across deciles; v3's stays inside +/-0.32
+at every level. That is what "calibration removes bias" looks like in the
+place it matters. One honest residual: week 1 is only two-thirds corrected. The
+prior season's average is at its stalest there and a calibration pooled over
+all weeks under-corrects it. If week-1 slates keep mattering — and under the
+Showdown-only scope they do — week 1 wants its own line, or a stronger shrink.
+Filed under T18's remaining work rather than solved here.
+
 **Method note.** Each of these is a claim that was cheap to test and would
 have gone into a lineup untested a week ago. v1's hypothesis came from two
 slates; seven seasons refuted it as stated in about four minutes. That is the
