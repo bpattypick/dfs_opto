@@ -361,3 +361,63 @@ pricing carries the information the projection lacks: the salary *is* the
 market's playing-time estimate, which is exactly what a prior-season average
 cannot see. Worth preferring over hand-zeroing individual players, which does
 not generalise to next week's slate.
+
+## Second slate: the recommendation lost, and the projection is why
+
+2026-w01 SF@LAR, 2,369 entries. The lineup this pipeline recommended —
+CPT Stafford, with Nacua / McCaffrey / Purdy / Higbee / Juszczyk — projected
+113.2 and **scored 58.15**, which would have finished about 1,215th of 2,369.
+The winner scored 98.05. Worth recording in full, because the failure modes were
+the ones already filed as open tasks, and one of them is new.
+
+**Projections are systematically optimistic, and it is regression to the mean.**
+Across the fifteen players owned above 15%, MAE was 7.2 points with a bias of
+**-5.1** — not scatter, a consistent overshoot. The three highest-projected
+players were the three biggest misses:
+
+| player | projected | actual | error |
+| --- | --- | --- | --- |
+| Puka Nacua | 25.1 | 12.4 | -12.7 |
+| Christian McCaffrey | 24.8 | 13.8 | -11.0 |
+| Matthew Stafford | 22.1 | 5.1 | -17.0 |
+
+`AvgPointsPerGame` is a per-game average from last season, so the top of the
+board is populated by whoever sustained the highest average — precisely the
+players a new season regresses downward. The fix is shrinkage toward a positional
+mean, weighted by how many games the average rests on (T18), not a better
+feed.
+
+**The captain slot multiplies that error by 1.5.** Stafford at 22.1 projected
+should have returned 33.2 as captain and returned 7.6. Because the optimizer
+captains whoever maximises projected points, it systematically captains the most
+over-projected player on the board, where the bias above is largest. Captain
+selection needs to weight *confidence*, not just level — a lower-projection,
+higher-floor captain is worth more than the raw arithmetic says.
+
+**The independent score model failed exactly where predicted (T13).** Purdy
+scored 22.1 and Stafford 5.1: one offence worked and the other did not, which is
+the single most important structure in a single-game slate and the one thing
+`independent_normal_scores` cannot represent. The double-QB stack was a bet on
+correlation, and nothing in the simulator could evaluate it.
+
+**T15's target replicates.** Field shape across both slates:
+
+| slate | distinct lineups | top build |
+| --- | --- | --- |
+| NE@SEA | 61.5% | 1.10% |
+| SF@LAR | 68.7% | 1.06% |
+
+Real Showdown fields are 60-70% distinct with a most-entered build near 1%.
+That is now a stable calibration target rather than one slate's number.
+
+**`jitter` is not stable across slates.** At 0.5 it nailed NE@SEA's top two
+(within a point) and understates SF@LAR's by 13-19 points, with MAE around 6 on
+both. So 0.5 is about as good as marginal sampling gets, not a correct value —
+consistent with T15's finding that the shape is wrong, not the parameter.
+
+**The salary floor belongs in selection, not in the field model.** T17's $1,200
+floor is right for choosing a lineup: Xavier Smith, the 12.5 pts/$1k artefact,
+drew 3.4% ownership and scored 0.0. But applying it to the ownership estimate
+made calibration *worse* (MAE 8.8 floored vs 6.4 unfloored), because real fields
+do roster a few minimum-priced players. Filter the pool the optimizer picks
+from; do not filter the pool used to model opponents.
