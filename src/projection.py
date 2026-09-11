@@ -134,7 +134,74 @@ class ShrunkVegas:
         return pd.DataFrame({"player_id": out["player_id"], "projection": proj})
 
 
-MODELS: dict[str, type] = {
+@dataclass
+class CalibratedAverage:
+    """v2: the trailing average, linearly calibrated on time-boxed history.
+
+    The v1 ablation showed regression to the mean is real and monotonic in
+    projection *level*: on 2020-2025 the bottom decile projects ~1 point low,
+    the top decile ~1.4 high, the top 5% ~2 high and ~2.5 on week 1, with the
+    overall bias near zero only because the tails cancel. v1's n/(n+k)
+    shrinkage could not touch it — a 17-game veteran gets weight ~1, no
+    shrinkage at all, and veterans are exactly who sit at the top.
+
+    So calibrate on level. Within history, compute what the baseline would have
+    projected for each player-week (that player's mean over their *previous*
+    ``window`` games, shifted so a score never informs its own projection),
+    regress actual on it, and apply the fitted line to the slate. A linear map
+    preserves rank order, so Spearman is untouched by construction; only the
+    tails move. Fitted on history strictly before the target week, so it cannot
+    look ahead. beta comes out around 0.87.
+    """
+
+    window: int = 17
+    min_fit_rows: int = 200
+    per_position: bool = False
+    name: str = "calibrated_average"
+    last_fit: dict | None = None   # {"ALL": (alpha, beta)} or one entry per position
+
+    def project(self, history: pd.DataFrame, slate: pd.DataFrame) -> pd.DataFrame:
+        _check_inputs(history, slate)
+        ordered = history.sort_values(["player_id", "season", "week"])
+        # Each row's own prior: mean of the player's previous `window` games.
+        prior = (ordered.groupby("player_id")["dk_points"]
+                 .transform(lambda s: s.shift(1).rolling(self.window, min_periods=1).mean()))
+        fit = pd.DataFrame({"prior": prior, "actual": ordered["dk_points"],
+                            "position": ordered["position"]}).dropna(subset=["prior"])
+        if len(fit) < self.min_fit_rows:
+            raise ProjectionError(
+                f"only {len(fit)} rows with a prior to calibrate on; need {self.min_fit_rows}"
+            )
+        beta, alpha = np.polyfit(fit["prior"], fit["actual"], 1)
+        fits = {"ALL": (float(alpha), float(beta))}
+        if self.per_position:
+            # A global slope over-corrects QBs and under-corrects TE/DST (v2
+            # backtest); the regression toward the mean differs by position.
+            # Positions with too few rows fall back to the pooled line.
+            for pos, g in fit.groupby("position"):
+                if len(g) >= self.min_fit_rows:
+                    b, a = np.polyfit(g["prior"], g["actual"], 1)
+                    fits[pos] = (float(a), float(b))
+        self.last_fit = fits
+
+        trailing = _trailing(history, self.window)
+        out = slate[["player_id", "position"]].merge(trailing, on="player_id", how="left")
+        keys = out["position"].where(out["position"].isin(fits.keys()), "ALL") \
+            if self.per_position else pd.Series("ALL", index=out.index)
+        a = keys.map(lambda k: fits[k][0]); b = keys.map(lambda k: fits[k][1])
+        return pd.DataFrame({
+            "player_id": out["player_id"],
+            "projection": a + b * out["trailing_mean"],
+        })
+
+
+def _by_position(**kw):
+    return CalibratedAverage(per_position=True, name="calibrated_by_position", **kw)
+
+
+MODELS: dict = {
     PriorAverage.name: PriorAverage,
     ShrunkVegas.name: ShrunkVegas,
+    CalibratedAverage.name: CalibratedAverage,
+    "calibrated_by_position": _by_position,
 }

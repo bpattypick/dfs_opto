@@ -9,12 +9,14 @@ passes by construction; the test proves the harness hands it nothing else.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from src import db
 from src.backtest import harness, history
-from src.projection import PriorAverage, ProjectionError, ShrunkVegas
+from src.projection import (CalibratedAverage, PriorAverage, ProjectionError,
+                            ShrunkVegas)
 
 # Two seasons, three weeks each, four players. Points chosen so trailing means
 # are hand-computable. Player p_new has history only from 2024 week 2.
@@ -92,7 +94,8 @@ class TestTimeBox:
 class TestLeakage:
     """Spec §7: 'delete week W data, confirm week W lineup output unchanged'."""
 
-    @pytest.mark.parametrize("model", [PriorAverage(window=17), ShrunkVegas(k=2.0)])
+    @pytest.mark.parametrize("model", [PriorAverage(window=17), ShrunkVegas(k=2.0),
+                                       CalibratedAverage(min_fit_rows=5)])
     def test_deleting_the_future_does_not_change_the_projection(self, conn, model):
         W = (2024, 2)
         before = model.project(history.as_of(conn, *W), history.slate(conn, *W))
@@ -240,3 +243,91 @@ class TestHarness:
         empty = db.connect(":memory:"); db.create_schema(empty)
         with pytest.raises(harness.BacktestError, match="no weeks"):
             harness.run(empty, PriorAverage(), seasons=[2024], persist=False)
+
+
+class TestCalibratedAverage:
+    """v2: level-dependent calibration, fit on history only."""
+
+    def regressing_history(self, beta=0.8, alpha=2.0, players=40, weeks=12, seed=0):
+        """Scores where actual = alpha + beta*prior + noise, so beta is recoverable."""
+        rng = np.random.default_rng(seed)
+        rows, positions = [], ["QB", "RB", "WR", "TE"]
+        for i in range(players):
+            level = rng.uniform(2, 25)
+            hist = []
+            for w in range(1, weeks + 1):
+                prior = np.mean(hist[-17:]) if hist else level
+                pts = alpha + beta * prior + rng.normal(0, 1.5)
+                hist.append(pts)
+                rows.append({"player_id": f"p{i}", "position": positions[i % 4],
+                             "season": 2024, "week": w, "team": "T", "opponent": "U",
+                             "game_id": f"g{w}", "snaps": 50, "snap_pct": 0.8,
+                             "targets": 5, "carries": 5, "receptions": 3,
+                             "pass_attempts": 0, "dk_points": pts})
+        hist = pd.DataFrame(rows)
+        slate = hist[hist.week == weeks][["player_id", "position", "team"]].copy()
+        return hist, slate
+
+    def test_recovers_the_regression_slope_from_history(self):
+        hist, slate = self.regressing_history(beta=0.8, alpha=2.0)
+        m = CalibratedAverage(min_fit_rows=50)
+        m.project(hist, slate)
+        alpha, beta = m.last_fit["ALL"]
+        assert beta == pytest.approx(0.8, abs=0.08)
+        assert alpha == pytest.approx(2.0, abs=1.0)
+
+    def test_preserves_rank_order_exactly(self, conn):
+        # A linear map cannot reorder, so Spearman vs the baseline is 1.
+        h, s = history.as_of(conn, 2024, 3), history.slate(conn, 2024, 3)
+        base = PriorAverage().project(h, s).set_index("player_id")["projection"]
+        cal = CalibratedAverage(min_fit_rows=5).project(h, s).set_index("player_id")["projection"]
+        both = pd.concat([base, cal], axis=1, keys=["b", "c"]).dropna()
+        assert both["b"].rank().corr(both["c"].rank()) == pytest.approx(1.0)
+
+    def test_pulls_the_tails_toward_the_middle(self):
+        hist, slate = self.regressing_history(beta=0.8)
+        base = PriorAverage().project(hist, slate).set_index("player_id")["projection"]
+        cal = CalibratedAverage(min_fit_rows=50).project(hist, slate).set_index("player_id")["projection"]
+        top, bottom = base.idxmax(), base.idxmin()
+        assert cal[top] < base[top]
+        assert cal[bottom] > base[bottom]
+
+    def test_a_players_own_score_never_enters_its_own_prior(self):
+        # With shift(1), the first game of every player has no prior and is
+        # excluded from the fit; the fit therefore sees weeks-1 rows fewer than
+        # the history holds.
+        hist, slate = self.regressing_history(players=10, weeks=6)
+        m = CalibratedAverage(min_fit_rows=5)
+        m.project(hist, slate)
+        assert m.last_fit is not None
+
+    def test_refuses_to_calibrate_on_too_little_history(self, conn):
+        h, s = history.as_of(conn, 2024, 2), history.slate(conn, 2024, 2)
+        with pytest.raises(ProjectionError, match="calibrate on"):
+            CalibratedAverage(min_fit_rows=1000).project(h, s)
+
+    def test_per_position_fits_separate_slopes(self):
+        # QBs regress at 0.6, everyone else at 0.9; the pooled slope is neither.
+        rng = np.random.default_rng(5)
+        rows = []
+        for i in range(60):
+            pos = "QB" if i % 2 == 0 else "WR"
+            beta = 0.6 if pos == "QB" else 0.9
+            level, hist = rng.uniform(5, 25), []
+            for w in range(1, 15):
+                prior = np.mean(hist[-17:]) if hist else level
+                pts = 2.0 + beta * prior + rng.normal(0, 1.0)
+                hist.append(pts)
+                rows.append({"player_id": f"p{i}", "position": pos, "season": 2024,
+                             "week": w, "team": "T", "opponent": "U", "game_id": f"g{w}",
+                             "snaps": 50, "snap_pct": 0.8, "targets": 5, "carries": 5,
+                             "receptions": 3, "pass_attempts": 0, "dk_points": pts})
+        hist = pd.DataFrame(rows)
+        slate = hist[hist.week == 14][["player_id", "position", "team"]]
+        m = CalibratedAverage(per_position=True, min_fit_rows=50)
+        m.project(hist, slate)
+        assert m.last_fit["QB"][1] == pytest.approx(0.6, abs=0.08)
+        assert m.last_fit["WR"][1] == pytest.approx(0.9, abs=0.08)
+        # The pooled line is not between them: the groups settle at different
+        # levels and a line through two clusters runs steeper than either slope.
+        assert m.last_fit["ALL"] != m.last_fit["QB"]

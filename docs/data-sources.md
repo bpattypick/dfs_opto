@@ -421,3 +421,176 @@ drew 3.4% ownership and scored 0.0. But applying it to the ownership estimate
 made calibration *worse* (MAE 8.8 floored vs 6.4 unfloored), because real fields
 do roster a few minimum-priced players. Filter the pool the optimizer picks
 from; do not filter the pool used to model opponents.
+
+## What a Showdown score model has to reproduce (measured, 2020-2025)
+
+Residuals are actual minus the trailing-average projection, over 34,936
+player-weeks. These are the numbers `independent_normal_scores` was standing in
+for, and they contradict it in three specific ways.
+
+**Spread grows with projection, but sub-linearly — not a constant cv.**
+
+    resid sd = 3.81 + 0.310 * projection        (R^2 = 0.96 across 10 bins)
+
+| position | a | b | R^2 |
+| --- | --- | --- | --- |
+| QB | 7.90 | 0.037 | 0.36 |
+| RB | 4.31 | 0.283 | 0.97 |
+| WR | 3.57 | 0.364 | 0.98 |
+| TE | 2.53 | 0.426 | 0.99 |
+| DST | 5.10 | 0.057 | 0.88 |
+
+The placeholder's flat cv of 0.55 was about right for a 20-point player
+(measured 0.51) and badly wrong for a 2-point one (measured ~2.0). QBs are
+noisy at every level; a QB's spread barely depends on how good he is.
+
+**The residual is right-skewed with fat tails, not normal.** Skew +0.93,
+excess kurtosis +2.28. A player scores under half his projection **33%** of
+the time and over double it **13%**. Fantasy scoring is bounded below at zero
+and unbounded above, so the marginal wants a right-skewed non-negative family
+(gamma or lognormal) with the mean set to the calibrated projection and the sd
+from the table above.
+
+**Correlation is a small block structure; almost everything else is zero.**
+Residual correlation between players in the same game, pairs with n >= 500:
+
+| pair | relation | r |
+| --- | --- | --- |
+| QB - his highest-projected pass-catcher | teammate | **+0.327** |
+| QB - WR | teammate | +0.213 |
+| QB - TE | teammate | +0.170 |
+| QB - QB | opponents | +0.185 |
+| DST - QB | opponents | **-0.251** |
+| DST - RB | opponents | -0.155 |
+| DST - WR | opponents | -0.103 |
+| DST - QB | teammate | -0.106 |
+| QB - RB | teammate | +0.028 |
+| WR - WR | teammate | +0.009 |
+| RB - WR | teammate | -0.007 |
+
+Three things worth reading off that. The stack is real: a QB and his top
+target move together at r = 0.33, which is the correlation the SF@LAR
+double-QB lineup was betting on without any way to price it. Opposing QBs are
+positively correlated (+0.185) — shootouts happen to both offences — which is
+the game-stack signal. And a DST is negatively correlated with the offence it
+faces (-0.25 with the QB), so DST + opposing QB is anti-stacked. Everything
+else — two receivers on the same team, a QB and his RB — is within noise of
+independent.
+
+**Design that follows (T13):** draw a correlated standard normal per lineup
+slot from a matrix built from the block structure above, then map each through
+the gamma quantile with that player's calibrated mean and position-fitted sd.
+A Gaussian copula with gamma marginals. Every number in it is measured; nothing
+is a placeholder.
+
+## Projection backtests: what seven seasons say about the live-slate diagnosis
+
+The first use of the backtest harness, 2020-2025, 34,936 player-weeks over 107
+weeks, every model scored on the same players. The baseline is `PriorAverage`,
+a trailing 17-game per-game mean — what DK's `AvgPointsPerGame` is.
+
+**v1 (`ShrunkVegas`) lost, and the ablation says why.**
+
+| model | MAE | RMSE | Spearman | bias |
+| --- | --- | --- | --- | --- |
+| baseline | 5.00 | 6.77 | 0.606 | +0.17 |
+| shrink only, k=4 | 5.06 | 6.74 | 0.599 | +0.21 |
+| shrink only, k=1 | 5.00 | 6.73 | 0.606 | +0.19 |
+| vegas only | 5.08 | 6.92 | 0.597 | +0.31 |
+| both (v1) | 5.11 | 6.82 | 0.583 | +0.32 |
+
+Multiplying a whole team by its Vegas implied total is what broke v1: alone it
+is worse on every metric. Shrinkage by n/(n+k) is harmless at k=1 and
+over-shrinks at k=4. Neither is the fix. Implied totals are not useless — they
+predict *team* scoring — but scaling every player on the roster by the same
+factor adds more noise than signal; if they help at all it will be through a
+usage-share model, not a multiplier.
+
+**The two live slates were right about the direction and wrong about the
+size.** Overall bias is +0.17, and +0.81 on week 1 — not the +5.1 those two
+low-scoring games showed. But by projection decile the regression-to-the-mean
+effect is real and monotonic:
+
+| decile | projected | actual | bias |
+| --- | --- | --- | --- |
+| 1 | 1.2 | 2.2 | -0.98 |
+| 5 | 6.6 | 6.3 | +0.29 |
+| 10 | 20.4 | 19.0 | +1.44 |
+| top 5% | 22.6 | 20.5 | **+2.03** |
+| top 5%, week 1 | 23.2 | 20.7 | **+2.50** |
+
+The bottom projects low, the top projects high, and the overall bias is near
+zero only because they cancel. This is why n/(n+k) shrinkage could not help: a
+17-game veteran gets weight ~1 — no shrinkage — and veterans are exactly who
+sit at the top. The bias depends on projection *level*, not sample size. It
+also sizes the captain problem (T19): the slot that pays 1.5x is filled from
+the top 5%, where the projection runs +2.0 to +2.5 high.
+
+**v2 (`CalibratedAverage`) — a global linear calibration — is a wash.** Fit
+actual on the trailing average within time-boxed history, apply the line. Rank
+order is preserved exactly (Spearman 0.606 -> 0.606, as it must be for a
+monotone map), overall bias falls to +0.06, RMSE 6.77 -> 6.74, but MAE 5.00 ->
+5.03. The per-position rows explain it: the fitted slope over-corrects QBs
+(bias -1.11) and under-corrects TE and DST (+0.4). **Regression to the mean
+differs by position.** v3 fits one line per position.
+
+**v3 (`calibrated_by_position`) removes the position bias and is otherwise a
+wash.**
+
+| model | MAE | RMSE | Spearman | bias | QB bias | TE bias |
+| --- | --- | --- | --- | --- | --- | --- |
+| baseline | 5.00 | 6.77 | 0.606 | +0.17 | +0.31 | +0.03 |
+| v2 global | 5.03 | 6.74 | 0.606 | +0.06 | -1.11 | +0.41 |
+| v3 per position | 5.01 | 6.73 | 0.604 | +0.07 | +0.31 | +0.09 |
+
+Every position's bias is now within 0.3 of zero, RMSE is the best of the three,
+and MAE has not moved. That is the expected shape of the result, not a
+disappointment: **calibration removes bias, and MAE is dominated by variance.**
+The residual sd is 5-9 points against a 1-2 point bias, so flattening the bias
+barely registers in absolute error. Reducing MAE needs *information* the
+trailing average does not have — usage trends, matchup, a proper Vegas model —
+not a recalibration of the same average.
+
+What v3 is for is the thing MAE does not measure: the +2.0 systematic error at
+the top of the board, which the captain slot multiplies by 1.5 and which feeds
+every expected-ROI number. No projection model is wired into the live lineup
+path yet — pools still read `AvgPointsPerGame` directly — so nothing ships by
+this result alone. When one is wired in, the choice between the baseline and v3
+is the owner's, with this table as the evidence. The ship rule in TASKS.md
+should distinguish a *calibration* step (criterion: bias by decile near zero,
+rank preserved) from a *prediction* step (criterion: MAE and Spearman); v1 and
+v3 were held to the wrong one of those.
+
+**Method note.** Each of these is a claim that was cheap to test and would
+have gone into a lineup untested a week ago. v1's hypothesis came from two
+slates; seven seasons refuted it as stated in about four minutes. That is the
+harness earning its place, and it is the reason the projection layer is being
+built before the field layer is touched again.
+
+## T13 validated: the correlated score model reproduces a real stack
+
+`src/scoremodel.py` — a Gaussian copula over lognormal marginals with the
+fitted variance function and the measured correlation blocks — checked against
+the realized covariance of QB + top-target pairs across all 107 weeks of
+2020-2025 (2,594 pairs), with two same-team receivers as the independent
+control (2,587 pairs):
+
+| | realized | simulated |
+| --- | --- | --- |
+| QB - top target residual correlation | +0.349 | +0.282 |
+| WR - WR (control) residual correlation | -0.019 | +0.014 |
+| sd of the QB + top target summed score | **14.29** | **14.13** |
+| ... if the two were independent | — | 12.50 |
+
+The number that matters for a lineup is the last pair of rows. A stacked pair's
+score is 1.8 points more volatile than independence would predict, and the
+simulator reproduces that within 1%. The placeholder gave 12.50 — it could not
+see the stack at all, which is why the SF@LAR double-QB lineup was entered as a
+bet nothing in the pipeline could price. The simulated pairwise correlation
+sits a little under the realized one because Pearson on a lognormal runs below
+the copula's underlying value; the covariance in points, which is what
+placement depends on, comes out right.
+
+Stated limits: the correlation table is pooled across 2020-2025 and every game
+state; it is not conditioned on spread or total, and the fit and the check use
+the same seasons. A held-out check waits for the 2026 archive to grow.
