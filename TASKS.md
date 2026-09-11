@@ -66,6 +66,14 @@ it — that one prices duplication against ROI rather than showing the trade by 
 
 *(append: task id, date, one-line result)*
 
+- **Phase 1 milestone 6: backtest harness + leakage test** — 2026-09-11 — `src/backtest/` replays
+  every historical week (spec §7): `history.as_of()` is strictly-before-W by tuple ordering,
+  `history.slate()` carries only pre-lock facts and never scores, so a model cannot look ahead by
+  construction. The leakage test CLAUDE.md's DoD has required since T1 now exists — the spec's
+  spot-check (delete week W and later, output unchanged) is a real test, plus a spy asserting the
+  harness never hands a model week W's scores. `src/projection.py` holds `PriorAverage` (what DK's
+  AvgPointsPerGame is) and `ShrunkVegas` (v1). First result on 34,936 player-weeks: **v1 loses to the
+  baseline** — MAE 5.11 vs 5.00, Spearman 0.583 vs 0.606. Not shipped. 24 tests.
 - **T1. Experiment ledger** — 2026-09-09 — `ledger.py` moved to `src/ledger.py` and wired to the
   main SQLite DB (`entries` table added to `src/db.py`, so `python -m src.db` builds it); add /
   result / report subcommands, dirty-tree refusal verified against the real repo, 32 tests in

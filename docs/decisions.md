@@ -80,3 +80,65 @@ any conclusion is allowed. GPP needs hundreds.
 
 **Revisit when:** the season-1 metric is met, or by January, whichever is first.
 The product phase is a separate decision made against real numbers, not this one.
+
+## Plan revision — projections forward, validate against history first
+
+**Decided 2026-09-11. Owner, on a proposal from the measurements.**
+
+Two live slates produced a measured error budget, and it contradicts the
+roadmap's ordering. The roadmap put the contest simulator first (Step 3) and
+projections last (Step 5, January), on the reasoning that projections are a
+solved problem you buy and a solo player's edge is process. The measurements:
+
+- projection bias **-5.1 points** per owned player, -11 to -17 on the top plays
+  (regression to the mean in `AvgPointsPerGame`)
+- the captain slot multiplies that by 1.5, and the optimizer captains the most
+  over-projected player by construction
+- no teammate correlation — the double-QB stack anti-correlated exactly as the
+  placeholder score model cannot represent
+- the field generator, which got most of the build effort, is the *least*
+  broken component: real fields are 60-70% distinct with a ~1% top build, and
+  it is within ~6 points of real ownership
+
+So the projection layer is the dominant error, and it happens to be the only
+layer that validates *offline*: seven seasons of `player_week_stats` are
+hundreds of validation slates available in minutes, where every other layer
+waits one slate per week.
+
+**Decision:** move the projection work forward from January to now, and
+validate each layer against its own ground truth before trusting it. This
+supersedes the Phase 2+ ordering in `docs/dfs-roadmap-v2.md`, in the same way
+that document superseded the July plan.
+
+**The one-improvement-per-month cadence is kept where it applies.** It was
+written for a solo builder's build bandwidth. For layers that backtest against
+history, the constraint is validation bandwidth and backtesting makes that fast;
+for layers that need standings, the bottleneck is genuinely data and the
+cadence stands.
+
+**Twelve-week outline:**
+
+1. *Foundation (to ~Sept 25):* load 2019-2025; backtest harness and the leakage
+   test CLAUDE.md already requires; projection v1 (shrinkage + Vegas implied
+   totals x usage share), shipped only if it beats `AvgPointsPerGame` on
+   held-out seasons; empirical variance and correlation from history; T3 as a
+   `calibrate` command.
+2. *Calibration (Oct):* minimum-stakes entries on every Showdown reachable —
+   Sunday games included — for the standings file, not the ROI. `calibrate`
+   after each. Field cluster term and captain confidence land against measured
+   targets.
+3. *Volume (Nov to mid-Dec):* real stakes in one contest type, one entry per
+   slate, many slates a week, every entry from committed code. Target is the
+   H1 metric: 50 attributable entries.
+4. *Mid-December:* decide on evidence. Positive cell -> scale and start the
+   product. Otherwise the ledger names the layer to fix.
+
+**Amends CONTEST_RULES R1** for data entries only: any single-game Showdown
+qualifies for a minimum-stakes calibration entry. Real-stakes entries still
+follow R1-R5 as written. The two are distinguished in the ledger by contest
+type and fee.
+
+**Knowingly accepted:** fifty entries supports a claim about cash, not GPP;
+GPP edge is a next-season question whatever gets built. "Speed" here is speed
+to *knowing whether the machine is calibrated and cash is positive*, which this
+plan reaches by December.
