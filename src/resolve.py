@@ -54,6 +54,7 @@ def resolve_pool(conn, pool: pd.DataFrame) -> pd.DataFrame:
     """
     out = pool.copy()
     out["gsis_id"] = None
+    out["team_changed"] = False
 
     # DST resolves exactly: DK's team name -> canonical abbreviation -> the
     # synthetic id db.py's schema uses for defenses. No name matching at all.
@@ -91,4 +92,24 @@ def resolve_pool(conn, pool: pd.DataFrame) -> pd.DataFrame:
 
     resolved = offense.apply(match, axis=1)
     out.loc[resolved.index, "gsis_id"] = resolved
+
+    # A trailing average is a snapshot of the ROLE a player held when the
+    # history was recorded, not just their name. A player who has changed
+    # teams since our last ingested season carries that old role's production
+    # into the average with nothing to say it no longer applies. This is not
+    # hypothetical: on the first live slate this ran on, it silently gave a
+    # bench QB (a full-time starter elsewhere through late 2025, now a
+    # third-string arm) a plausible 14.6-point projection, and a second
+    # bench QB 7.9 points off a single 2022 start at a different team. Flag it
+    # rather than trust it — `out["team_changed"]` is True wherever the
+    # player's most recent known team differs from the export's team, so
+    # every caller can decide, but none can silently miss it.
+    matched_latest = latest.set_index("player_id")[["_team"]]
+    for idx, gsis in resolved.items():
+        if pd.isna(gsis) or gsis not in matched_latest.index:
+            continue
+        last_team = matched_latest.loc[gsis, "_team"]
+        if isinstance(last_team, pd.Series):  # duplicate rows, defensively
+            last_team = last_team.iloc[0]
+        out.loc[idx, "team_changed"] = last_team != offense.loc[idx, "_team"]
     return out

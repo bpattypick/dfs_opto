@@ -612,3 +612,55 @@ placement depends on, comes out right.
 Stated limits: the correlation table is pooled across 2020-2025 and every game
 state; it is not conditioned on spread or total, and the fit and the check use
 the same seasons. A held-out check waits for the 2026 archive to grow.
+
+## The team-change blind spot: a stale ROLE, not a stale name (T20)
+
+Caught by the owner on the first live run of v3, not by any test: the
+recommended DEN@KC lineup rostered **Justin Fields as cheap value at $8,600**,
+v3-projected 14.6 points, resolved cleanly to real NFL history. The owner's
+objection was immediate and correct — Fields will not play for KC unless
+Mahomes is hurt, and a confident 14.6 for a player realistically getting zero
+snaps is not a number to enter money on.
+
+Checked directly: Fields' entire trailing window is **1.0 snap_pct at NYJ
+through week 11 of 2025** — a full-time starter, at a different team, in a
+role he no longer holds. A second player in the same pool had the identical
+defect: Sam Ehlinger resolved to a single full-snap start at IND **in 2022**
+and got 7.9 points from it, three-plus years and two teams removed from
+today's bench role at DEN.
+
+The mechanism: a trailing average is a snapshot of the role a player held
+*when the history was recorded*, not a property of their name. An offseason
+team change invalidates that snapshot completely, and this project's database
+has no way to know one happened — the 2026 season is not ingested at all
+(`config.yaml` seasons end at 2025), so a trade or a free-agent signing since
+the last loaded season is **structurally invisible** until games are actually
+played and ingested. Falling back to `AvgPointsPerGame` does not fix this: DK's
+own average is built from the identical stale history, so it carries the exact
+same blind spot as v3.
+
+This is the mirror case of T16 (Jadarian Price, projected 0 despite starting)
+in mechanism only — both are "the model has no notion of current depth-chart
+role" — but opposite in shape and arguably more dangerous. T16 produces an
+obviously-wrong 0 that invites scrutiny. This produces a plausible,
+GSIS-resolved, confidently-labeled "v3" number sitting right next to real
+starters, which is precisely what makes it easy to miss.
+
+**Fix, shipped:** `src.resolve.resolve_pool` now flags `team_changed` —
+comparing a resolved player's most recent known team against the export's
+team. `src.liveproj.project_live_pool` refuses v3 for anyone flagged, whether
+or not they clear `min_games`, and tags them `proj_source="team_changed"` — a
+distinct value from plain `"avg_points"` so they cannot blend in with an
+ordinary unresolved player. The CLI (`scripts/live_showdown.py`) prints every
+flagged player as a loud warning before showing any recommendation, naming the
+stale number and pointing at the override mechanism.
+
+**What the fix does not do:** guess the player's real role. It can only say
+"do not trust this number," not supply a better one. That still requires a
+human's own knowledge of the depth chart, recorded as a committed override —
+exactly the mechanism built for Stribling, now used again for Fields and
+Ehlinger. A cheap general improvement worth doing later: weight DK's own
+salary as a role signal for flagged players specifically, since a genuine
+backup is rarely priced at $8,600+ captain-eligible the way a timeshare or
+new starter would be — but salary reflects name recognition too (see the
+Xavier Smith case, T17), so it is a hint, not a substitute for review.

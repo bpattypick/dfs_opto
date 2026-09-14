@@ -74,6 +74,26 @@ class TestDstResolution:
         assert out.iloc[0]["gsis_id"] == "DST_KC"
 
 
+class TestTeamChangeFlag:
+    def test_flags_a_player_whose_team_no_longer_matches_their_history(self, conn):
+        # Justin Fields, 2025: full-time starter at NYJ. Exported here on KC.
+        out = resolve_pool(conn, pool([("dk1", "Bo Nix", "KC", "QB", 9000, 10.0)]))
+        assert bool(out.iloc[0]["team_changed"]) is True
+
+    def test_does_not_flag_a_player_on_the_same_team(self, conn):
+        out = resolve_pool(conn, pool([("dk1", "Bo Nix", "DEN", "QB", 10000, 19.0)]))
+        assert bool(out.iloc[0]["team_changed"]) is False
+
+    def test_an_unresolved_player_is_not_flagged(self, conn):
+        # Nothing to compare against, so no false claim either way.
+        out = resolve_pool(conn, pool([("dk4", "Nobody Yet", "KC", "WR", 200, 0.0)]))
+        assert bool(out.iloc[0]["team_changed"]) is False
+
+    def test_dst_is_never_flagged(self, conn):
+        out = resolve_pool(conn, pool([("dk5", "Broncos", "DEN", "DST", 4800, 8.0)]))
+        assert bool(out.iloc[0]["team_changed"]) is False
+
+
 class TestMixedPool:
     def test_resolves_what_it_can_and_leaves_the_rest_null(self, conn):
         out = resolve_pool(conn, pool([

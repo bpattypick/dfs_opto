@@ -73,8 +73,20 @@ def build_pool(export_path: str, season: int, week: int) -> pd.DataFrame:
         resolved_n = resolved["gsis_id"].notna().sum()
         projected = project_live_pool(conn, resolved, season=season, week=week)
     v3_n = (projected["proj_source"] == "v3").sum()
+    changed = projected[projected["proj_source"] == "team_changed"]
     print(f"resolved {resolved_n}/{len(projected)} to history; "
-          f"{v3_n} projected with v3, {len(projected) - v3_n} on AvgPointsPerGame\n")
+          f"{v3_n} projected with v3, {len(projected) - v3_n - len(changed)} on "
+          f"AvgPointsPerGame, {len(changed)} on team_changed (v3 refused)")
+    if len(changed):
+        print(f"\n!! TEAM CHANGE SINCE LAST DATA — v3 refused, review before trusting "
+              f"AvgPointsPerGame either (same stale-role blind spot):")
+        for _, r in changed.iterrows():
+            print(f"     {r['name']:<22}{r['team']:<5}AvgPointsPerGame={r['projection']:.1f}"
+                  f"  -- check current depth-chart role before using this number")
+        print(f"     Fix with a committed override in data/projection_overrides.csv "
+              f"if you know their real role.\n")
+    else:
+        print()
 
     floored = projected[projected["salary"] >= SALARY_FLOOR].reset_index(drop=True)
     if len(floored) < len(projected):

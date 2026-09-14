@@ -75,6 +75,16 @@ class TestProjectLivePool:
         out = project_live_pool(conn, pool_row("Ghost", None), season=2026, week=1)
         assert (out["proj_source"] == "avg_points").all()
 
+    def test_a_team_changer_never_gets_v3_even_with_full_history(self, conn):
+        # The actual regression: a full-time starter's history at their old
+        # team confidently projects a role they no longer hold.
+        row = pool_row("Vet QB", "00-001")
+        row["team_changed"] = True
+        model = CalibratedAverage(per_position=True, min_fit_rows=3)
+        out = project_live_pool(conn, row, season=2026, week=1, model=model)
+        assert out.iloc[0]["proj_source"] == "team_changed"
+        assert out.iloc[0]["projection"] == 15.0   # untouched, not silently trusted
+
     def test_accepts_a_custom_model_instance(self, conn):
         model = CalibratedAverage(per_position=True, window=3, min_fit_rows=3)
         out = project_live_pool(conn, pool_row("Vet QB", "00-001"), season=2026, week=1,
