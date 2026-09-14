@@ -166,13 +166,14 @@ def main(argv=None) -> int:
     for i, row in table.head(args.top).iterrows():
         lu = row["lineup"]
         proj = lineup_points(lu, dict(zip(pool.player_id, pool.projection)))
-        flags = " ".join(f"[{src[p]}]" for p in lu.players if src[p] == "avg_points")
+        flags = " ".join(f"[{src[p]}]" for p in lu.players if src[p] != "v3")
         print(f"{i+1:<5}{proj:>7.1f}{row['dup_rate']*100:>6.2f}%{row['dup_roi']:>+9.1%}"
               f"{row['raw_roi']:>+9.1%}  CPT {name[lu.captain]}")
         print(f"      {' / '.join(name[x] for x in lu.flex)}"
               + (f"   {flags}" if flags else ""))
-    print("\n[avg_points] marks a player whose slot in that lineup used "
-          "AvgPointsPerGame, not v3 (unresolved to history).")
+    print("\n[avg_points] = AvgPointsPerGame, not v3 (unresolved to history).")
+    print("[team_changed] = v3 REFUSED, AvgPointsPerGame also unreliable -- see the "
+          "warning above, review this player's real role before trusting the lineup.")
     return 0
 
 
