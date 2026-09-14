@@ -108,6 +108,7 @@ class ContestResult:
     cash_rate: float
     top1_rate: float
     win_rate: float
+    solo_win_rate: float     # rank 1 AND alone there — the whole first prize, no split
     mean_rank: float
     median_rank: float
 
@@ -115,7 +116,8 @@ class ContestResult:
         roi = "n/a" if self.expected_roi is None else f"{self.expected_roi:+.1%}"
         return (
             f"ROI {roi} | cash {self.cash_rate:.1%} | top-1% {self.top1_rate:.1%} "
-            f"| win {self.win_rate:.2%} | median rank {self.median_rank:,.0f} "
+            f"| win {self.win_rate:.2%} (solo {self.solo_win_rate:.2%}) "
+            f"| median rank {self.median_rank:,.0f} "
             f"of {self.entries:,} | {self.duplicates} duplicate(s)"
         )
 
@@ -202,7 +204,7 @@ def simulate_contest(
 
     rng = np.random.default_rng(seed)
     payout_sum = 0.0
-    cashes = tops = wins = 0
+    cashes = tops = wins = solo_wins = 0
     ranks = np.empty(trials)
 
     done = 0
@@ -227,6 +229,11 @@ def simulate_contest(
         cashes += int((payout > 0).sum())
         tops += int((rank <= top1_cutoff).sum())
         wins += int((rank == 1).sum())
+        # rank==1 alone is not "won outright" — a tied-for-first trial has
+        # rank 1 too, and the payout above already shows it split. This is
+        # the stat that actually answers "how often do I take the whole first
+        # prize with nobody to share it with."
+        solo_wins += int(((rank == 1) & (tied == 0)).sum())
         ranks[done:done + n] = rank
         done += n
 
@@ -240,6 +247,7 @@ def simulate_contest(
         cash_rate=cashes / trials,
         top1_rate=tops / trials,
         win_rate=wins / trials,
+        solo_win_rate=solo_wins / trials,
         mean_rank=float(ranks.mean()),
         median_rank=float(np.median(ranks)),
     )

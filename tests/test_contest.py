@@ -160,6 +160,45 @@ class TestTieSplitting:
         assert result.mean_payout == 0.0
 
 
+class TestSoloWin:
+    def test_an_outright_win_counts_as_solo(self):
+        # No duplicate in the field, no one to tie -- every win is alone.
+        result = simulate_contest(
+            CANDIDATE, [WORSE, WORST], PLAYERS, fixed_scores(), PAYOUTS,
+            entry_fee=10.0, trials=5, seed=0,
+        )
+        assert result.win_rate == 1.0
+        assert result.solo_win_rate == 1.0
+
+    def test_a_tied_first_place_counts_as_win_but_not_solo(self):
+        # A candidate present in the field ties itself for first every trial:
+        # rank==1 every time, but never alone there.
+        result = simulate_contest(
+            CANDIDATE, [CANDIDATE, WORSE], PLAYERS, fixed_scores(), PAYOUTS,
+            entry_fee=10.0, trials=5, seed=0,
+        )
+        assert result.win_rate == 1.0
+        assert result.solo_win_rate == 0.0
+
+    def test_second_place_is_neither_a_win_nor_a_solo_win(self):
+        result = simulate_contest(
+            CANDIDATE, [WORSE, WORST], PLAYERS, fixed_scores(p0=15.0), PAYOUTS,
+            entry_fee=10.0, trials=4, seed=0,
+        )
+        assert result.median_rank == 2
+        assert result.win_rate == 0.0
+        assert result.solo_win_rate == 0.0
+
+    def test_solo_win_rate_can_never_exceed_win_rate(self):
+        # Solo wins are a subset of all wins by construction.
+        for copies in (0, 1, 2, 3):
+            result = simulate_contest(
+                CANDIDATE, [CANDIDATE] * copies + [WORSE, WORST], PLAYERS,
+                fixed_scores(), PAYOUTS, entry_fee=10.0, trials=5, seed=0,
+            )
+            assert result.solo_win_rate <= result.win_rate
+
+
 class TestTopPercentile:
     def test_top1_rate_on_a_large_field(self):
         field = [WORSE] * 99

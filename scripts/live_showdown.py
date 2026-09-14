@@ -162,15 +162,15 @@ def main(argv=None) -> int:
     print(f"SYNTHETIC contest: {args.field_size:,} entries, ~${fee:.2f} fee — "
           f"ranking only, not a real payout table\n")
     print(f"{'rank':<5}{'proj':>7}{'dup%':>7}{'dupROI':>9}{'rawROI':>9}"
-          f"{'cash%':>7}{'top1%':>7}{'win%':>7}  lineup")
-    print("-" * 110)
+          f"{'cash%':>7}{'top1%':>7}{'win%':>7}{'solo%':>7}  lineup")
+    print("-" * 118)
     for i, row in table.head(args.top).iterrows():
         lu = row["lineup"]
         proj = lineup_points(lu, dict(zip(pool.player_id, pool.projection)))
         flags = " ".join(f"[{src[p]}]" for p in lu.players if src[p] != "v3")
         print(f"{i+1:<5}{proj:>7.1f}{row['dup_rate']*100:>6.2f}%{row['dup_roi']:>+9.1%}"
               f"{row['raw_roi']:>+9.1%}{row['cash_rate']*100:>6.1f}%{row['top1_rate']*100:>6.1f}%"
-              f"{row['win_rate']*100:>6.1f}%  CPT {name[lu.captain]}")
+              f"{row['win_rate']*100:>6.1f}%{row['solo_win_rate']*100:>6.2f}%  CPT {name[lu.captain]}")
         print(f"      {' / '.join(name[x] for x in lu.flex)}"
               + (f"   {flags}" if flags else ""))
     print("\n[avg_points] = AvgPointsPerGame, not v3 (unresolved to history).")

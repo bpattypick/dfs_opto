@@ -133,6 +133,7 @@ def compare_duplication(
             "cash_rate": actual.cash_rate,
             "top1_rate": actual.top1_rate,
             "win_rate": actual.win_rate,
+            "solo_win_rate": actual.solo_win_rate,
         })
     return pd.DataFrame(rows).sort_values("dup_roi", ascending=False).reset_index(drop=True)
 
