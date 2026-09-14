@@ -28,7 +28,7 @@ UNAVAILABLE = ("OUT", "IR", "IR-R", "SUSP", "NA")
 # `questionable()` exists so a caller can look at them deliberately.
 QUESTIONABLE = ("Q", "D", "GTD")
 
-POOL_COLUMNS = ("player_id", "name", "team", "salary", "projection")
+POOL_COLUMNS = ("player_id", "name", "team", "position", "salary", "projection")
 
 
 class PoolError(RuntimeError):
@@ -50,7 +50,7 @@ def build_pool(
     simulation needs. Pass ``player_id`` once the crosswalk has resolved GSIS
     ids, which is what anything joining across sources needs.
     """
-    required = {"dk_name", "dk_salary", "team", id_column, projection_column}
+    required = {"dk_name", "dk_salary", "team", "position", id_column, projection_column}
     missing = sorted(required - set(salaries.columns))
     if missing:
         raise PoolError(f"salary rows are missing columns {missing}")
@@ -78,6 +78,8 @@ def build_pool(
         "player_id": frame[id_column].astype(str),
         "name": frame["dk_name"].astype(str).str.strip(),
         "team": frame["team"].astype(str),
+        "position": frame["position"].astype(str).str.strip().str.upper()
+                    if "position" in frame.columns else None,
         "salary": frame["dk_salary"].astype(float),
         "projection": pd.to_numeric(frame[projection_column], errors="coerce"),
     }).reset_index(drop=True)

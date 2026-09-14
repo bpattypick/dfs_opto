@@ -13,23 +13,24 @@ from src.pool import PoolError, build_pool
 
 def salaries(**overrides):
     rows = [
-        # name, team, salary, avg_points, status
-        ("Jaxon Smith-Njigba", "SEA", 10600, 21.99, ""),
-        ("Drake Maye",         "NE",  10000, 20.90, ""),
-        ("Zach Charbonnet",    "SEA",  8200, 10.96, "OUT"),
-        ("Jason Myers",        "SEA",  5400, 11.95, ""),
-        ("Hunter Henry",       "NE",   4800,  9.90, ""),
-        ("Tory Horton",        "SEA",  2800,  8.14, "Q"),
-        ("Patriots",           "NE",   3400,  8.38, "IR"),
+        # name, position, team, salary, avg_points, status
+        ("Jaxon Smith-Njigba", "WR",  "SEA", 10600, 21.99, ""),
+        ("Drake Maye",         "QB",  "NE",  10000, 20.90, ""),
+        ("Zach Charbonnet",    "RB",  "SEA",  8200, 10.96, "OUT"),
+        ("Jason Myers",        "K",   "SEA",  5400, 11.95, ""),
+        ("Hunter Henry",       "TE",  "NE",   4800,  9.90, ""),
+        ("Tory Horton",        "WR",  "SEA",  2800,  8.14, "Q"),
+        ("Patriots",           "DST", "NE",   3400,  8.38, "IR"),
     ]
     frame = pd.DataFrame({
         "source_id": [f"id{i}" for i in range(len(rows))],
         "player_id": [f"00-{i:05d}" for i in range(len(rows))],
         "dk_name": [r[0] for r in rows],
-        "team": [r[1] for r in rows],
-        "dk_salary": [r[2] for r in rows],
-        "avg_points": [r[3] for r in rows],
-        "status": [r[4] for r in rows],
+        "position": [r[1] for r in rows],
+        "team": [r[2] for r in rows],
+        "dk_salary": [r[3] for r in rows],
+        "avg_points": [r[4] for r in rows],
+        "status": [r[5] for r in rows],
     })
     for column, value in overrides.items():
         frame[column] = value
