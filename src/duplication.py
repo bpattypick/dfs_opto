@@ -132,6 +132,7 @@ def compare_duplication(
             "roi_cost": alone.expected_roi - actual.expected_roi,
             "cash_rate": actual.cash_rate,
             "top1_rate": actual.top1_rate,
+            "win_rate": actual.win_rate,
         })
     return pd.DataFrame(rows).sort_values("dup_roi", ascending=False).reset_index(drop=True)
 

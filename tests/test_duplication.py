@@ -120,6 +120,16 @@ class TestCompareDuplication:
         )
         assert table["dup_roi"].is_monotonic_decreasing
 
+    def test_win_rate_is_reported_alongside_cash_and_top1(self):
+        # ROI is a mean; win_rate/cash_rate answer "how often" rather than
+        # "how much on average" -- a materially different question a user can
+        # ask about the same candidate.
+        table = duplication.compare_duplication(
+            [A], [B, C], PLAYERS, fixed_scores(), PAYOUTS,
+            entry_fee=5.0, trials=5, seed=0,
+        )
+        assert table.iloc[0]["win_rate"] == 1.0   # A always outscores B and C
+
     def test_duplication_alone_cannot_overtake_a_better_lineup(self):
         # Worth pinning down, because it bounds the whole strategy. With fixed
         # scores A always outscores B, so A's copies occupy the ranks above B.
