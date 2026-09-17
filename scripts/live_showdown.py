@@ -96,7 +96,7 @@ def build_pool(export_path: str, season: int, week: int) -> pd.DataFrame:
         overrides = None
 
     with db.session() as conn:
-        resolved = resolve_pool(conn, pool)
+        resolved = resolve_pool(conn, pool, season=season, week=week)   # T14: the week's rosters
         resolved_n = resolved["gsis_id"].notna().sum()
         projected = project_live_pool(conn, resolved, season=season, week=week)
     v4_n = (projected["proj_source"] == "v4").sum()

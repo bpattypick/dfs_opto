@@ -110,3 +110,56 @@ class TestMixedPool:
         src = pool([("dk1", "Bo Nix", "DEN", "QB", 10000, 19.0)])
         resolve_pool(conn, src)
         assert "gsis_id" not in src.columns
+
+
+class TestCrosswalkPath:
+    """T14: with the slate's week, the real crosswalk runs against that week's rosters."""
+
+    @pytest.fixture
+    def rostered(self, conn):
+        db.upsert(conn, "rosters", [
+            {"player_id": "00-001", "season": 2026, "week": 2, "team": "KC", "position": "QB",
+             "status": "ACT", "name": "Bo Nix"},                      # moved to KC this year
+            {"player_id": "00-003", "season": 2026, "week": 2, "team": "KC", "position": "QB",
+             "status": "INA", "name": "Garrett Nussmeier"},           # rookie, no stats anywhere
+        ])
+        db.upsert(conn, "games", [{"game_id": "2026_02_DEN_KC", "season": 2026, "week": 2,
+                                   "home_team": "KC", "away_team": "DEN"}])
+        return conn
+
+    def test_a_rookie_on_the_roster_resolves_with_no_history(self, rostered):
+        out = resolve_pool(rostered, pool([("dk9", "Garrett Nussmeier", "KC", "QB", 3000, 0.0)]),
+                           season=2026, week=2)
+        assert out.iloc[0]["gsis_id"] == "00-003"
+        assert bool(out.iloc[0]["team_changed"]) is False
+
+    def test_a_team_changer_resolves_and_is_flagged(self, rostered):
+        out = resolve_pool(rostered, pool([("dk1", "Bo Nix", "KC", "QB", 10000, 19.0)]),
+                           season=2026, week=2)
+        assert out.iloc[0]["gsis_id"] == "00-001"
+        assert bool(out.iloc[0]["team_changed"]) is True         # last stat row was DEN
+
+    def test_the_dk_id_is_persisted_and_beats_a_respelled_name(self, rostered):
+        resolve_pool(rostered, pool([("dk1", "Bo Nix", "KC", "QB", 10000, 19.0)]), season=2026, week=2)
+        stored = pd.read_sql_query("SELECT source_id, player_id FROM id_crosswalk WHERE source='dk'", rostered)
+        assert dict(zip(stored.source_id, stored.player_id)) == {"dk1": "00-001"}
+        out = resolve_pool(rostered, pool([("dk1", "Bo Nix Jr.", "KC", "QB", 10000, 19.0)]),
+                           season=2026, week=2)
+        assert out.iloc[0]["gsis_id"] == "00-001"
+
+    def test_dst_and_kicker_behave_as_before(self, rostered):
+        out = resolve_pool(rostered, pool([("dk5", "Chiefs", "KC", "DST", 4800, 8.0),
+                                           ("dk6", "Harrison Butker", "KC", "K", 4000, 8.0)]),
+                           season=2026, week=2)
+        assert list(out["gsis_id"]) == ["DST_KC", None]
+
+    def test_a_week_with_no_reference_leaves_the_pool_unresolved(self, conn):
+        out = resolve_pool(conn, pool([("dk1", "Bo Nix", "DEN", "QB", 10000, 19.0)]),
+                           season=2030, week=1)
+        # nothing rostered in 2030 or 2029, and no stats: falls through, no crash
+        assert out.iloc[0]["gsis_id"] is None or out.iloc[0]["gsis_id"] == "00-001"
+
+    def test_legacy_path_is_unchanged_without_a_week(self, rostered):
+        out = resolve_pool(rostered, pool([("dk1", "Bo Nix", "DEN", "QB", 10000, 19.0)]))
+        assert out.iloc[0]["gsis_id"] == "00-001"
+        assert bool(out.iloc[0]["team_changed"]) is False

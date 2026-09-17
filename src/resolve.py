@@ -1,23 +1,26 @@
-"""Resolve a live DK pool to canonical GSIS ids — the minimal live-slate wedge.
+"""Resolve a live DK pool to canonical GSIS ids.
 
-T14: the crosswalk cannot resolve a forward-looking slate, because its
-reference is built from ``player_week_stats`` for the slate's own week, which
-does not exist until the games are played. That is still true and still needs
-a real fix. This module is a narrower, stated-scope workaround for one purpose:
-join a DK Showdown pool to GSIS ids so the validated projection (T18) and score
-model (T13) can be used on tonight's slate, rather than falling back to
-``AvgPointsPerGame`` for players who resolve fine.
+T14, fixed. The crosswalk's reference used to be built from the slate's own
+stat rows, which do not exist until the games are played, so a live export
+could only be joined by this module's stop-gap: name + most-recent-team
+against the ``players`` table. The reference now unions the week's
+**rosters** (published before the games), so ``resolve_pool`` can hand a
+live pool to the real waterfall (``src.ingest.crosswalk``) when told the
+slate's week: manual overrides, the DST map, the persisted DK-id map, exact
+name+team+position, name+position, then fuzzy within team and position --
+and persist what it matched, so a DK id resolved once resolves by id from
+then on.
 
-Matching is name + most-recent-team, using the same normalization the real
-crosswalk uses (``crosswalk.normalize_name``), against the ``players`` table —
-season-agnostic, so it does not depend on the target week's own stats existing.
-DST resolves exactly, by construction: DK's team name maps through
-``teams.normalize_team`` to the ``DST_<TEAM>`` synthetic id from db.py's
-schema, no fuzzy matching involved. Kickers are not in the stats feed
-(FANTASY_POSITIONS excludes K) and are never resolved — every caller must
-handle an unresolved player by falling back to the pool's own projection,
-not by erroring, since K and a real fraction of WR/RB depth chart churn are
-expected to miss.
+Without ``season``/``week`` the original stop-gap runs unchanged (name +
+most-recent stat team), which is what a caller without a schedule gets.
+Either way ``gsis_id`` is ``None`` where nothing matched -- kickers always,
+since they are not in the stats feed and there is nothing to project them
+from -- and callers fall back to the pool's own projection rather than
+erroring, because a live slate always has a few.
+
+``team_changed`` is kept in both modes: True where the player's most recent
+*stat* row is on a different team from the export. RoleAware projects from
+the new team's depth chart, so it is information for the CLI, not a refusal.
 """
 
 from __future__ import annotations
@@ -26,7 +29,10 @@ import pandas as pd
 
 from src import db
 from src import teams as teams_mod
+from src.ingest import crosswalk
 from src.ingest.crosswalk import normalize_name
+
+SOURCE = "dk"
 
 
 def _latest_team_by_player(conn) -> pd.DataFrame:
@@ -42,45 +48,49 @@ def _latest_team_by_player(conn) -> pd.DataFrame:
     )
 
 
-def resolve_pool(conn, pool: pd.DataFrame) -> pd.DataFrame:
-    """Add a ``gsis_id`` column to a pool frame (``player_id, name, team, ...``).
-
-    ``gsis_id`` is ``None`` where nothing matched — kickers always, plus any
-    offensive player whose name+team didn't join (a mid-season trade, a name
-    spelled differently by DK, a rookie's first snap before their first
-    ``player_week_stats`` row exists). Callers use the pool's own projection
-    for those rather than treating a miss as fatal: a live slate always has a
-    few, and refusing to build a lineup over a kicker is not the goal.
-    """
-    out = pool.copy()
-    out["gsis_id"] = None
-    out["team_changed"] = False
-
-    # DST resolves exactly: DK's team name -> canonical abbreviation -> the
-    # synthetic id db.py's schema uses for defenses. No name matching at all.
-    is_dst = out["position"] == "DST" if "position" in out.columns else pd.Series(False, index=out.index)
-    if is_dst.any():
-        team = out.loc[is_dst, "team"].map(teams_mod.normalize_team)
-        out.loc[is_dst, "gsis_id"] = "DST_" + team
-
-    offense = out[~is_dst].copy() if is_dst.any() else out.copy()
-    if offense.empty:
-        return out
-
+def _latest_teams(conn) -> pd.DataFrame:
     history = _latest_team_by_player(conn)
     if history.empty:
-        return out
+        return history
     history = history.sort_values(["player_id", "season", "week"])
     latest = history.groupby("player_id").tail(1)
-    latest = latest.assign(_norm_name=latest["name"].map(normalize_name),
-                           _team=latest["team"].map(teams_mod.normalize_team))
+    return latest.assign(_norm_name=latest["name"].map(normalize_name),
+                         _team=latest["team"].map(teams_mod.normalize_team))
 
+
+def _flag_team_changes(out: pd.DataFrame, latest: pd.DataFrame) -> pd.DataFrame:
+    if latest.empty:
+        return out
+    last_team = latest.drop_duplicates("player_id").set_index("player_id")["_team"]
+    export_team = out["team"].map(teams_mod.normalize_team)
+    known = out["gsis_id"].map(last_team)
+    out["team_changed"] = (known.notna() & (known != export_team)).astype(bool)
+    return out
+
+
+def _resolve_by_crosswalk(conn, out: pd.DataFrame, season: int, week: int) -> pd.DataFrame:
+    reference = crosswalk.build_reference(conn, season, week)
+    if reference[reference["position"] != "DST"].empty:
+        return out
+    rows = pd.DataFrame({
+        "source_name": out["name"], "source_id": out["player_id"].astype(str),
+        "team": out["team"], "position": out["position"],
+    }, index=out.index)
+    result = crosswalk.resolve(rows, reference, source=SOURCE,
+                               id_map=crosswalk.stored_id_map(conn, SOURCE),
+                               manual=crosswalk.load_manual_overrides())
+    out.loc[result.matched.index, "gsis_id"] = result.matched["player_id"]
+    crosswalk.persist(conn, SOURCE, result.matched)
+    return out
+
+
+def _resolve_by_latest_team(conn, out: pd.DataFrame, latest: pd.DataFrame) -> pd.DataFrame:
+    is_dst = out["position"] == "DST" if "position" in out.columns else pd.Series(False, index=out.index)
+    offense = out[~is_dst].copy()
+    if offense.empty or latest.empty:
+        return out
     offense["_norm_name"] = offense["name"].map(normalize_name)
     offense["_team"] = offense["team"].map(teams_mod.normalize_team)
-
-    # Prefer a name+team match (handles two players sharing a surname); fall
-    # back to name-only for a player whose team in our history is stale
-    # relative to a preseason trade the export already reflects.
     by_name_team = latest.set_index(["_norm_name", "_team"])["player_id"]
     by_name = latest.drop_duplicates("_norm_name", keep=False).set_index("_norm_name")["player_id"]
 
@@ -92,24 +102,32 @@ def resolve_pool(conn, pool: pd.DataFrame) -> pd.DataFrame:
 
     resolved = offense.apply(match, axis=1)
     out.loc[resolved.index, "gsis_id"] = resolved
-
-    # A trailing average is a snapshot of the ROLE a player held when the
-    # history was recorded, not just their name. A player who has changed
-    # teams since our last ingested season carries that old role's production
-    # into the average with nothing to say it no longer applies. This is not
-    # hypothetical: on the first live slate this ran on, it silently gave a
-    # bench QB (a full-time starter elsewhere through late 2025, now a
-    # third-string arm) a plausible 14.6-point projection, and a second
-    # bench QB 7.9 points off a single 2022 start at a different team. Flag it
-    # rather than trust it — `out["team_changed"]` is True wherever the
-    # player's most recent known team differs from the export's team, so
-    # every caller can decide, but none can silently miss it.
-    matched_latest = latest.set_index("player_id")[["_team"]]
-    for idx, gsis in resolved.items():
-        if pd.isna(gsis) or gsis not in matched_latest.index:
-            continue
-        last_team = matched_latest.loc[gsis, "_team"]
-        if isinstance(last_team, pd.Series):  # duplicate rows, defensively
-            last_team = last_team.iloc[0]
-        out.loc[idx, "team_changed"] = last_team != offense.loc[idx, "_team"]
     return out
+
+
+def resolve_pool(conn, pool: pd.DataFrame, season: int | None = None,
+                 week: int | None = None) -> pd.DataFrame:
+    """Add ``gsis_id`` and ``team_changed`` to a pool frame.
+
+    With ``season`` and ``week``: the real crosswalk against that week's
+    rosters (T14). Without: the name + most-recent-team stop-gap.
+    """
+    out = pool.copy()
+    out["gsis_id"] = None
+    out["team_changed"] = False
+    if out.empty:
+        return out
+
+    # DST resolves exactly in both modes: DK's team name -> canonical code ->
+    # the synthetic id db.py's schema uses for defenses.
+    is_dst = out["position"] == "DST" if "position" in out.columns else pd.Series(False, index=out.index)
+    if is_dst.any():
+        team = out.loc[is_dst, "team"].map(teams_mod.normalize_team)
+        out.loc[is_dst, "gsis_id"] = "DST_" + team
+
+    latest = _latest_teams(conn)
+    if season is not None and week is not None:
+        out = _resolve_by_crosswalk(conn, out, season, week)
+    else:
+        out = _resolve_by_latest_team(conn, out, latest)
+    return _flag_team_changes(out, latest)

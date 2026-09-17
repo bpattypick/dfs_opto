@@ -1227,3 +1227,60 @@ ran 3% under, and its mean is the one that matches (the lognormal's is the
 projection sum, 1.3 points high). Same seasons for fit and check, as
 before; a held-out version waits on the 2026 archive.
 
+## The crosswalk resolves a slate before it is played (T14)
+
+`crosswalk.build_reference` used to be "everyone with a stat row that
+season/week": right for a backtest, impossible for a live export, whose week
+has no stat rows until the games are over. `src/resolve.py` covered the live
+path with a name + most-recent-team lookup against `players`, which is why
+13–18 players per pool went unresolved (rookies, anyone with no stat line
+yet, kickers) and why a team-changer had to be *refused* (T20).
+
+**The reference is now three sources, unioned.** The week's **rosters** —
+every status, because DK prices the whole 53 plus elevations, and the weekly
+roster is published before the games (the 2026 file carried week 2 on the
+Thursday of week 2); the week's stat rows, as before; and a DST for every
+team on the schedule that week. Name-to-id mapping only, so nothing here can
+leak an outcome — the "validated against the roster as it actually was"
+guarantee is, if anything, stronger: the roster *is* the roster. A week with
+neither rosters nor stats yet falls back to the most recent earlier roster
+week and says so (`ref.attrs["reference_week"]`, logged by the salary
+loader), rather than raising.
+
+**Kickers stay in `rosters` now.** The stats feed has nothing on them, so the
+roster ingest dropped them and the crosswalk could never resolve one; they
+are kept (`ROSTER_POSITIONS`) and the backtest pool filters to skill
+positions instead. `salaries.player_id` is therefore populated for kickers
+too, which T3's ownership table will want.
+
+**The live path uses the real waterfall.** `resolve_pool(conn, pool, season,
+week)` runs the pool through `crosswalk.resolve` against that week's
+reference — manual overrides, DST map, the persisted DK-id map, exact
+name+team+position, name+position, fuzzy within team and position — and
+persists what it matched, so a DK id resolved once resolves by id from then
+on whatever DK does to the spelling. Without a week it is the old stop-gap,
+unchanged. `team_changed` is still reported (most recent stat team ≠ export
+team); v4 projects from the new team's depth chart, so it is information,
+not a refusal.
+
+**Measured on the three archived 2026 exports.**
+
+| slate  | pool | stop-gap | crosswalk | still unresolved                                |
+|--------|------|----------|-----------|-------------------------------------------------|
+| NE@SEA | 46   | 37       | **46**    | —                                               |
+| SF@LAR | 49   | 33       | **49**    | —                                               |
+| DEN@KC | 51   | 38       | **49**    | two long snappers DK lists as TE (position LS)  |
+
+`python -m src.ingest.dk_salaries load` now stores all three slates — the
+first forward-looking loads ever — at 98.5% / 98.1% / 96.4% join; DEN@KC
+sits under the 97% threshold by exactly those two long snappers, and the
+warning names them in `data/unmatched_review.csv`, which is the threshold
+doing its job. On a second load 49 / 62 / 49 rows resolved by the persisted
+DK id. `id_crosswalk` holds 167 DK rows.
+
+**What this unblocks.** Garrett Nussmeier (rookie QB, no stat line anywhere)
+now resolves, gets a QB3 role prior from v4 instead of DK's 0.0, and stops
+being an `avg_points` row on the board. The `salaries` table can carry a
+live slate, which T3 (standings → ownership by player_id) and the December
+ownership model both need.
+

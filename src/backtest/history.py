@@ -77,7 +77,8 @@ def _dressed(conn: sqlite3.Connection, where: str, params: tuple) -> pd.DataFram
         FROM rosters r
         JOIN games g ON g.season = r.season AND g.week = r.week
                     AND (g.home_team = r.team OR g.away_team = r.team)
-        WHERE r.status = 'ACT' AND ({where.replace('season', 'r.season').replace('week', 'r.week')})
+        WHERE r.status = 'ACT' AND r.position IN ('QB','RB','WR','TE')
+          AND ({where.replace('season', 'r.season').replace('week', 'r.week')})
         """,
         params,
     )
@@ -218,7 +219,8 @@ def roster_slate(conn: sqlite3.Connection, season: int, week: int) -> pd.DataFra
     dressed = _frame(
         conn,
         "SELECT player_id, position, team FROM rosters "
-        "WHERE season = ? AND week = ? AND status = 'ACT'",
+        "WHERE season = ? AND week = ? AND status = 'ACT' "
+        "AND position IN ('QB','RB','WR','TE')",
         (season, week),
     )
     if games.empty or dressed.empty:
@@ -255,7 +257,8 @@ def prior_snap_share(conn: sqlite3.Connection, season: int, week: int) -> pd.Dat
                     AND (g.home_team = r.team OR g.away_team = r.team)
         LEFT JOIN player_week_stats s ON s.player_id = r.player_id
                     AND s.season = r.season AND s.week = r.week
-        WHERE r.status = 'ACT' AND ((r.season < ?) OR (r.season = ? AND r.week < ?))
+        WHERE r.status = 'ACT' AND r.position IN ('QB','RB','WR','TE')
+          AND ((r.season < ?) OR (r.season = ? AND r.week < ?))
         GROUP BY r.player_id
         """,
         (season, season, week),

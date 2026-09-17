@@ -43,7 +43,8 @@ def load_slate(key: str, season: int, week: int):
     export, standing = SLATES[key]
     pool = from_export(export)
     with db.session() as conn:
-        pool = project_live_pool(conn, resolve_pool(conn, pool), season=season, week=week)
+        pool = project_live_pool(conn, resolve_pool(conn, pool, season=season, week=week),
+                                 season=season, week=week)
     entries = standings.read_standings(standing)
     real, unmatched = standings.to_lineups(entries, pool)
     return pool, real, unmatched

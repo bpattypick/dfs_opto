@@ -289,17 +289,24 @@ def resolve_and_store(conn, salaries: pd.DataFrame, cfg=None) -> crosswalk.Match
     week = int(salaries["week"].iloc[0])
 
     reference = crosswalk.build_reference(conn, season=season, week=week)
-    if reference.empty:
+    if reference[reference["position"] != "DST"].empty:
         raise RuntimeError(
-            f"no player_week_stats for {season} week {week}; "
-            "run `python -m src.ingest.nfl_stats` first"
+            f"no rosters or player_week_stats for {season} week {week} (or any earlier "
+            "week); run `python -m src.ingest.nfl_stats` first"
         )
+    ref_week = reference.attrs.get("reference_week", (season, week))
+    if tuple(ref_week) != (season, week):
+        log.warning("dk salaries %s w%s resolved against the %s w%s roster (T14 fallback)",
+                    season, week, *ref_week)
 
     source_rows = salaries.rename(columns={"dk_name": "source_name"})
+    if "dk_id" in source_rows.columns:
+        source_rows = source_rows.assign(source_id=source_rows["dk_id"].astype(str))
     result = crosswalk.resolve(
         source_rows,
         reference,
         source=SOURCE,
+        id_map=crosswalk.stored_id_map(conn, SOURCE),
         manual=crosswalk.load_manual_overrides(cfg=cfg),
         fuzzy_threshold=int(cfg.get("crosswalk.fuzzy_threshold", 90)),
     )

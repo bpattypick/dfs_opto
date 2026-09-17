@@ -253,12 +253,15 @@ def _attach_snaps(
 # The dressed game-day roster. Every stat-recording player-week in 2024 carried
 # this status, so it is exactly the set of players who could have scored.
 ROSTER_STATUS_ACTIVE = "ACT"
+# Kickers are kept in `rosters` for the crosswalk (T14: DK prices them and the
+# stats feed has nothing on them); the backtest pool filters to skill positions.
+ROSTER_POSITIONS = FANTASY_POSITIONS + ("K",)
 
 
 def _transform_rosters(raw: pd.DataFrame, season_types: list[str]) -> pd.DataFrame:
     frame = raw[raw["game_type"].isin(season_types)].copy()
     frame["position"] = frame["position"].map(normalize_position)
-    frame = frame[frame["position"].isin(FANTASY_POSITIONS)]
+    frame = frame[frame["position"].isin(ROSTER_POSITIONS)]
     frame = frame.dropna(subset=["gsis_id"])
 
     out = pd.DataFrame({

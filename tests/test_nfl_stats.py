@@ -88,6 +88,9 @@ def raw_rosters(season: int) -> pd.DataFrame:
             {"season": season, "week": w, "game_type": "REG", "team": "SEA", "position": "OL",
              "status": "ACT", "gsis_id": "00-ol", "full_name": "A Lineman",
              "depth_chart_position": "T"},
+            {"season": season, "week": w, "game_type": "REG", "team": "SEA", "position": "K",
+             "status": "ACT", "gsis_id": "00-k", "full_name": "Jason Myers",
+             "depth_chart_position": "K"},
             {"season": season, "week": w, "game_type": "REG", "team": "SEA", "position": "TE",
              "status": "DEV", "gsis_id": None, "full_name": "No Id Yet",
              "depth_chart_position": None},
@@ -199,7 +202,7 @@ class TestRosters:
     def test_skill_positions_regular_season_with_an_id_only(self, conn, sources):
         nfl_stats.ingest(conn, [SEASON])
         frame = self.rosters(conn)
-        assert set(frame.player_id) == {"00-qb", "00-wr", "00-fb"}   # no OL, no id-less TE
+        assert set(frame.player_id) == {"00-qb", "00-wr", "00-fb", "00-k"}   # K kept (T14); no OL, no id-less TE
         assert set(frame.week) == {1, 2}                             # no wild-card row
         assert set(frame.status) == {"ACT", "INA"}                   # every status kept
 
@@ -214,7 +217,7 @@ class TestRosters:
         nfl_stats.ingest(conn, [SEASON])
         n = len(self.rosters(conn))
         nfl_stats.ingest(conn, [SEASON])
-        assert len(self.rosters(conn)) == n == 6
+        assert len(self.rosters(conn)) == n == 8
 
     def test_a_missing_roster_file_warns_and_everything_else_still_loads(self, conn, sources,
                                                                           monkeypatch):

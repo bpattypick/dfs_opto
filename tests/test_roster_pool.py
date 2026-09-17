@@ -77,7 +77,7 @@ ROSTERS = (
     + [(p, 2024, w, "BBB", pos, "ACT") for p, pos in (("p_newqb", "QB"), ("p_new", "RB")) for w in (2, 3)]
     + [(p, 2024, w, "BBB", pos, "RES") for p, pos in (("p_rb1", "RB"), ("p_ir", "WR")) for w in (1, 2, 3)]
     + [("p_ina", 2024, 2, "BBB", "RB", "INA"), ("p_ps", 2024, 2, "BBB", "WR", "DEV"),
-       ("p_bye", 2024, 2, "CCC", "TE", "ACT")]
+       ("p_bye", 2024, 2, "CCC", "TE", "ACT"), ("p_k", 2024, 2, "AAA", "K", "ACT")]
 )
 # (player, season, week, team, position, depth_rank, injury_status)
 ROLES = (
@@ -146,9 +146,9 @@ class TestRosterSlate:
         s = history.slate(conn, *W, pool="roster")
         assert set(s.player_id) == POOL_W2
 
-    def test_reserve_practice_squad_inactive_and_bye_are_out(self, conn):
+    def test_reserve_practice_squad_inactive_bye_and_kickers_are_out(self, conn):
         ids = set(history.slate(conn, *W, pool="roster").player_id)
-        assert not ids & {"p_ir", "p_ps", "p_ina", "p_bye", "p_rb1"}
+        assert not ids & {"p_ir", "p_ps", "p_ina", "p_bye", "p_rb1", "p_k"}
 
     def test_pre_lock_columns_only_and_no_scores(self, conn):
         s = history.slate(conn, *W, pool="roster")

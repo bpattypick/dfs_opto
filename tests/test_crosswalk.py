@@ -299,3 +299,59 @@ class TestPersistence:
         assert list(ref["player_id"]) == ["00-0000001"]
         assert ref.iloc[0]["norm_name"] == "dj moore"
         conn.close()
+
+
+class TestForwardLookingReference:
+    """T14: a slate that has not been played yet resolves against the week's rosters."""
+
+    @pytest.fixture
+    def conn(self, tmp_path):
+        conn = db.connect(tmp_path / "t.sqlite")
+        db.create_schema(conn)
+        db.upsert(conn, "players", [
+            {"player_id": "00-0000001", "name": "D.J. Moore", "position": "WR", "first_season": 2018},
+            {"player_id": "00-0000009", "name": "Old Timer", "position": "TE", "first_season": 2015},
+        ])
+        # week 1 played (stats), week 2 upcoming (rosters only), week 3 nothing yet
+        db.upsert(conn, "player_week_stats", [
+            {"player_id": "00-0000001", "season": 2026, "week": 1, "team": "CHI"},
+            {"player_id": "00-0000009", "season": 2026, "week": 1, "team": "CHI"},   # no roster row
+        ])
+        db.upsert(conn, "rosters", [
+            {"player_id": "00-0000001", "season": 2026, "week": w, "team": "CHI", "position": "WR",
+             "status": "ACT", "name": "DJ Moore"} for w in (1, 2)
+        ] + [
+            {"player_id": "00-0000002", "season": 2026, "week": 2, "team": "CHI", "position": "QB",
+             "status": "INA", "name": "Rookie Arm"},
+        ])
+        db.upsert(conn, "games", [
+            {"game_id": "2026_02_CHI_GB", "season": 2026, "week": 2, "home_team": "GB", "away_team": "CHI"},
+        ])
+        yield conn
+        conn.close()
+
+    def test_an_upcoming_week_resolves_against_its_rosters_and_schedule(self, conn):
+        ref = crosswalk.build_reference(conn, season=2026, week=2)
+        ids = set(ref["player_id"])
+        assert {"00-0000001", "00-0000002", "DST_CHI", "DST_GB"} <= ids   # inactive rookie included
+        assert "00-0000009" not in ids                                     # not on the week-2 roster
+        assert ref.attrs["reference_week"] == (2026, 2)
+        assert ref[ref.player_id == "00-0000001"].iloc[0]["norm_name"] == "dj moore"
+
+    def test_a_played_week_unions_rosters_and_stat_rows(self, conn):
+        ref = crosswalk.build_reference(conn, season=2026, week=1)
+        assert {"00-0000001", "00-0000009"} <= set(ref["player_id"])
+        assert (ref["player_id"] == "00-0000001").sum() == 1                # unioned, not doubled
+
+    def test_a_week_with_nothing_yet_falls_back_to_the_latest_roster(self, conn):
+        ref = crosswalk.build_reference(conn, season=2026, week=3)
+        assert ref.attrs["reference_week"] == (2026, 2)
+        assert "00-0000002" in set(ref["player_id"])
+
+    def test_stored_id_map_returns_persisted_vendor_ids(self, conn):
+        matched = pd.DataFrame({"player_id": ["00-0000001"], "source_id": ["dk42"],
+                                "source_name": ["DJ Moore"], "match_method": ["exact"]})
+        crosswalk.persist(conn, "dk", matched)
+        m = crosswalk.stored_id_map(conn, "dk")
+        assert list(m["source_id"]) == ["dk42"] and list(m["player_id"]) == ["00-0000001"]
+        assert crosswalk.stored_id_map(conn, "other").empty

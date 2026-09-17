@@ -302,3 +302,50 @@ class TestShowdownExport:
         ])
         with pytest.raises(dk_salaries.SalaryFormatError, match="appear twice"):
             dk_salaries.parse_dk_export(path)
+
+
+class TestForwardLookingSlate:
+    """T14: a live export loads before its games are played."""
+
+    def _conn(self):
+        conn = db.connect(":memory:")
+        db.create_schema(conn)
+        db.upsert(conn, "rosters", [
+            {"player_id": "00-0000101", "season": 2026, "week": 1, "team": "SEA", "position": "WR",
+             "status": "ACT", "name": "Jaxon Smith-Njigba"},
+            {"player_id": "00-0000102", "season": 2026, "week": 1, "team": "NE", "position": "QB",
+             "status": "ACT", "name": "Drake Maye"},
+        ])
+        db.upsert(conn, "games", [
+            {"game_id": "2026_01_NE_SEA", "season": 2026, "week": 1, "home_team": "SEA", "away_team": "NE"},
+        ])
+        return conn
+
+    def test_loads_with_rosters_and_no_stat_rows(self, tmp_path):
+        conn = self._conn()
+        path = tmp_path / "2026-w01_dk_showdown-ne-sea.csv"
+        path.write_text("\n".join([HEADER,
+            "WR,Jaxon Smith-Njigba (1),Jaxon Smith-Njigba,1,CPT,15000," + GAME + ",SEA,20.0,",
+            "WR,Jaxon Smith-Njigba (1),Jaxon Smith-Njigba,1,FLEX,10000," + GAME + ",SEA,20.0,",
+            "QB,Drake Maye (2),Drake Maye,2,CPT,13500," + GAME + ",NE,18.0,",
+            "QB,Drake Maye (2),Drake Maye,2,FLEX,9000," + GAME + ",NE,18.0,",
+            "DST,Seahawks (3),Seahawks,3,CPT,4500," + GAME + ",SEA,7.0,",
+            "DST,Seahawks (3),Seahawks,3,FLEX,3000," + GAME + ",SEA,7.0,",
+        ]) + "\n")
+        result = dk_salaries.load_file(conn, path)
+        assert result.coverage == 1.0, result.summary()
+        stored = pd.read_sql_query("SELECT dk_name, player_id FROM salaries ORDER BY dk_name", conn)
+        assert dict(zip(stored.dk_name, stored.player_id)) == {
+            "Drake Maye": "00-0000102", "Jaxon Smith-Njigba": "00-0000101", "Seahawks": "DST_SEA"}
+        # the DK ids are now persisted, so the next load resolves them by id
+        again = dk_salaries.load_file(conn, path)
+        assert again.counts.get("id_map", 0) == 2
+        assert conn.execute("SELECT COUNT(*) FROM salaries").fetchone()[0] == 3   # idempotent
+        conn.close()
+
+    def test_nothing_ingested_at_all_still_fails_loudly(self, tmp_path):
+        conn = db.connect(":memory:"); db.create_schema(conn)
+        path = write_showdown(tmp_path, [("A Player", "CPT", 15000), ("A Player", "FLEX", 10000)])
+        with pytest.raises(RuntimeError, match="no rosters"):
+            dk_salaries.load_file(conn, path)
+        conn.close()

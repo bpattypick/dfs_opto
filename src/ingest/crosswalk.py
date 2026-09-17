@@ -93,29 +93,82 @@ class MatchResult:
 # --- Reference universe -------------------------------------------------------
 
 
+def _week_filter(week: int | None, alias: str) -> tuple[str, list]:
+    return (f" AND {alias}.week = ?", [week]) if week is not None else ("", [])
+
+
+def _reference_rows(conn, season: int, week: int | None) -> pd.DataFrame:
+    """Rosters + stat rows + DSTs for the season (and week). No normalisation yet."""
+    clause, extra = _week_filter(week, "r")
+    rosters = pd.read_sql_query(
+        f"SELECT DISTINCT player_id, name, team, position FROM rosters r "
+        f"WHERE r.season = ?{clause}", conn, params=[season] + extra)
+    clause, extra = _week_filter(week, "s")
+    stats = pd.read_sql_query(
+        f"""SELECT DISTINCT s.player_id, p.name, s.team, p.position
+            FROM player_week_stats s JOIN players p ON p.player_id = s.player_id
+            WHERE s.season = ?{clause}""", conn, params=[season] + extra)
+    clause, extra = _week_filter(week, "g")
+    games = pd.read_sql_query(
+        f"SELECT home_team, away_team FROM games g WHERE g.season = ?{clause}",
+        conn, params=[season] + extra)
+    teams = sorted(set(games["home_team"].dropna()) | set(games["away_team"].dropna()))
+    dst = pd.DataFrame({
+        "player_id": [teams_mod.dst_player_id(t) for t in teams],
+        "name": [teams_mod.BY_ABBR[t].full_name if t in teams_mod.BY_ABBR else t for t in teams],
+        "team": teams, "position": "DST",
+    })
+    return pd.concat([rosters, stats, dst], ignore_index=True)
+
+
 def build_reference(conn, season: int, week: int | None = None) -> pd.DataFrame:
-    """Candidate players to match against: everyone who has a stat row.
+    """Candidate players to match against for ``season`` (and ``week``).
 
-    Restricted to ``season`` (and ``week`` when given) so a match is validated
-    against the roster as it actually was, not an all-time name list.
-    """
-    params: list = [season]
-    week_clause = ""
-    if week is not None:
-        week_clause = " AND s.week = ?"
-        params.append(week)
+    T14. Three sources, unioned: the week's **rosters** (every status -- DK
+    prices the whole 53 plus elevations, and the weekly roster is published
+    before the games, so a slate that has not been played yet resolves
+    against the roster as it will be), the week's stat rows (the original
+    reference; a handful of stat-recorders carry no roster row), and a DST
+    for every team with a game that week. Name-to-id mapping only, so
+    nothing here can leak an outcome.
 
-    query = f"""
-        SELECT DISTINCT s.player_id, p.name, s.team, p.position
-        FROM player_week_stats s
-        JOIN players p ON p.player_id = s.player_id
-        WHERE s.season = ?{week_clause}
+    If the week has neither rosters nor stat rows yet, the most recent
+    earlier week with rosters (this season, else last season's final week)
+    stands in, and ``ref.attrs["reference_week"]`` says which -- a caller
+    that cares (the salary loader) logs it rather than hiding it.
     """
-    ref = pd.read_sql_query(query, conn, params=params)
+    ref = _reference_rows(conn, season, week)
+    used = (season, week)
+    if week is not None and ref[ref["position"] != "DST"].empty:
+        prior = pd.read_sql_query(
+            "SELECT season, MAX(week) AS week FROM rosters WHERE season = ? AND week < ? "
+            "UNION ALL SELECT season, MAX(week) FROM rosters WHERE season = ?",
+            conn, params=(season, week, season - 1))
+        prior = prior.dropna(subset=["week"])
+        if not prior.empty:
+            used = (int(prior.iloc[0]["season"]), int(prior.iloc[0]["week"]))
+            log.warning("no rosters or stats for %s week %s; reference built from %s week %s",
+                        season, week, *used)
+            ref = _reference_rows(conn, *used)
+    ref = ref.dropna(subset=["player_id"]).copy()
     ref["norm_name"] = ref["name"].map(normalize_name)
     ref["team"] = ref["team"].map(teams_mod.normalize_team)
     ref["position"] = ref["position"].map(normalize_position)
-    return ref.dropna(subset=["player_id"])
+    ref = ref.drop_duplicates(subset=["player_id", "team", "position"]).reset_index(drop=True)
+    ref.attrs["reference_week"] = used
+    return ref
+
+
+def stored_id_map(conn, source: str) -> pd.DataFrame:
+    """``source_id -> player_id`` pairs already persisted for ``source``.
+
+    A vendor id resolved once resolves by id forever after, whatever the
+    vendor does to the spelling of the name.
+    """
+    frame = pd.read_sql_query(
+        "SELECT source_id, player_id FROM id_crosswalk WHERE source = ? AND source_id <> ''",
+        conn, params=(source,))
+    return frame.drop_duplicates(subset=["source_id"])
 
 
 # --- Manual overrides ---------------------------------------------------------
