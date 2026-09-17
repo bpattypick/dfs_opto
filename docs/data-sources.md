@@ -1210,3 +1210,20 @@ Mahomes still leads on lineup p25 (74.1), Nix second, Dobbins third. The
 live script prints which marginal it is running and, if the JSON is
 missing, that floors read ten points too kind.
 
+**T13's stack check, re-run under the new marginal.** The copula is
+unchanged but the marginal is not, so the summed QB + top-target spread —
+the number a stacked lineup's placement depends on — was re-measured on
+the v4 pairs (3,219 team-weeks, QB projected ≥ 8, top target ≥ 5):
+
+| | realised | lognormal | empirical |
+|---|---|---|---|
+| sd of the QB + top-target summed score | **15.63** | 15.13 | 16.26 |
+| … if the two were independent | — | 13.23 | 13.84 |
+| mean of the sum | 31.25 | 32.55 | 31.03 |
+
+Both marginals reproduce the stack (+2.4 points of spread over
+independence); the empirical one runs 4% over on spread where the lognormal
+ran 3% under, and its mean is the one that matches (the lognormal's is the
+projection sum, 1.3 points high). Same seasons for fit and check, as
+before; a held-out version waits on the 2026 archive.
+
