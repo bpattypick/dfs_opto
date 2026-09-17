@@ -48,7 +48,6 @@ Parse DK contest standings CSVs from `data/raw/standings/` into an `actual_owner
 - **T20. Team-change blind spot — CAUGHT LIVE, fixed.** A trailing average is a snapshot of the role a player held when the history was recorded; an offseason team change invalidates it completely and is structurally invisible (2026 isn't ingested at all). On the first live v3 run this gave a bench QB (full-time NYJ starter through 2025, now third-string at KC) a confident 14.6-point projection, and a second bench QB 7.9 off a single 2022 start at a different team. AvgPointsPerGame carries the identical blind spot, so falling back to it does not help. Mirrors T16 in mechanism, opposite in shape, and more dangerous — T16 produces an obvious 0 that invites scrutiny, this produces a plausible resolved number that doesn't. Fixed: `resolve_pool` flags `team_changed`; `project_live_pool` refuses v3 for anyone flagged and tags them distinctly; the CLI prints them as a loud warning before any recommendation. The fix can only say 'do not trust this,' not supply a better number — that still needs a human's depth-chart knowledge via a committed override, same mechanism as Stribling. Two overrides added for tonight (Fields, Ehlinger, both DEN@KC bench QBs). 4 new tests. *A finding the owner caught, not a test.*
 - **T18. Level-dependent projection calibration — measured; v3 built, verdict a wash on MAE.** Regression to the mean is real and monotonic in projection level on 2020-2025 (top 5% projects +2.0 high, +2.5 on week 1) but overall bias is only +0.17, not the +5.1 two live slates suggested. v1's n/(n+k) shrinkage cannot touch it and its Vegas multiplier made things worse alone; v2's global line over-corrects QBs; **v3 fits one line per position and brings every position's bias within 0.3 of zero** (MAE 5.01 vs 5.00, RMSE 6.73 vs 6.77, Spearman 0.604 vs 0.606). Calibration removes bias, not variance, so MAE was the wrong ship criterion for it. **Owner decision:** wire v3 or the baseline into the live pool when a model replaces `AvgPointsPerGame` (T16 path); evidence in data-sources.md. **Confirmed by decile:** baseline top-5% bias +2.03 -> v3 -0.19; the monotone ramp is gone. Residual: week-1 top-5% is +0.91 (from +2.50) — pooled calibration under-corrects the stalest week, so week 1 wants its own line. Reducing MAE itself needs new information (usage trends, matchup), which is the next projection task, not another recalibration.
 
-- **T24. Score model's floor is optimistic — lower-tail calibration.** Measured under T19 on the projected top-12 per game, 2020–2025, v4 means: the lognormal's median and ceiling are calibrated (≤p50 0.507, ≤p90 0.886, ≤p95 0.952) but a fifth of actuals fall below its "10th percentile" and a third below its "25th" (WR worst, QB best). Cause: no mass at zero (3–7.5% of top-12 players score exactly 0) and a thin left tail. Fix is in `src/scoremodel.py`: a per-position zero-inflation term and a fatter left tail (or an empirical quantile map fitted on time-boxed residuals), re-validated on the same coverage table; the captain board and contest sim both inherit it. Until then the cash board's floor ordering is directionally right and its floor numbers read ~10 percentile points too kind. *Blocks: trusting a floor number, not the ordering.*
 
 
 
@@ -71,6 +70,14 @@ it — that one prices duplication against ROI rather than showing the trade by 
 
 *(append: task id, date, one-line result)*
 
+- **T24. Score model's floor** — 2026-09-17 — `EmpiricalMarginals` in `src/scoremodel.py`: the
+  quantile curve of actual/projection per position and projection band (zeros included, interpolated
+  between bands), fitted on the v4 roster-pool replay, behind the unchanged Gaussian copula; the
+  lognormal path is untouched when no marginal is passed. Calibration-first (curves keep the empirical
+  mean ratio; `normalise_mean` is the opt-out). **Held out 2024–25, projected top-12: ≤p10 0.094
+  (lognormal 0.210), ≤p25 0.232 (0.318), ≤p50 0.487, ≤p90 0.906, ≤p95 0.955** — every position within
+  ~0.05 of ideal. Shipped as `data/score_marginals.json` (refit with `scripts/fit_score_marginals.py`);
+  the captain board and contest sim read it. DEN@KC: Dobbins' own p10 5.2 → 2.7. 16 new tests; 510 passing.
 - **T19. Captain selection by floor and ceiling** — 2026-09-17 — `src/captain.py`: per-player
   floor/median/ceiling closed-form from T13's fitted lognormal; one candidate lineup per plausible
   captain with the exact best five-FLEX complement (verified against exhaustive search); lineup-level

@@ -1158,3 +1158,55 @@ the field. The shortlist handed to the contest sim is now the top candidates
 by the objective's lineup quantile, not by mean, so a steadier or
 higher-ceiling captain is not cut before the sim sees it.
 
+## The score model's floor, fixed (T24): an empirical marginal behind the same copula
+
+T19 measured the lognormal's lower tail as optimistic on the honest pool.
+The cause was structural — a lognormal has no mass at zero and a thin left
+tail — so the fix is a different marginal, not a re-fit: `EmpiricalMarginals`
+in `src/scoremodel.py` is the quantile curve of **actual / projection**, per
+position and projection band (five quantile bands; a player's curve is
+interpolated between the two nearest band centres), fitted on the v4
+roster-pool replay with zeros included. It sits behind the unchanged
+Gaussian copula, so the measured correlation blocks still apply, and the
+lognormal path is byte-for-byte intact when no marginal is passed.
+
+**Two choices, stated.** (1) The curves are *not* mean-normalised: they are
+the calibrated distribution of what happened given the projection, so the
+simulator's mean is projection × the band's mean ratio — a few percent under
+the projection at the top of the board (v4 runs ~3–5% high there), over it
+at the bottom; T18's regression to the mean is now in the simulator as well
+as the projection. `normalise_mean=True` exists for a caller who wants the
+projection kept as the mean at the cost of calibration. (2) The shape is
+tied to the projection model that produced the residuals; when v4 changes,
+`scripts/fit_score_marginals.py` refits it and prints this table again.
+
+**Held out: fit on 2020–2023, checked on 2024–2025.** Share of actuals at or
+below each model quantile on the projected top-12 per game (n = 6,528;
+ideal = the quantile):
+
+| marginal  | ≤p10      | ≤p25      | ≤p50  | ≤p75  | ≤p90  | ≤p95  |
+|-----------|-----------|-----------|-------|-------|-------|-------|
+| lognormal | 0.210     | 0.318     | 0.502 | 0.721 | 0.886 | 0.951 |
+| empirical | **0.094** | **0.232** | 0.487 | 0.745 | 0.906 | 0.955 |
+
+Every position lands within ~0.05 of ideal at every quantile (QB ≤p10
+0.102, WR 0.113, DST 0.096; RB 0.066 and TE 0.075 now read a touch
+*conservative* at the floor). The shipped file, refit on all six seasons,
+reads 0.105 / 0.240 / 0.492 / 0.748 / 0.904 / 0.955 in-sample on the same
+slice. On the full dressed pool the ≤p10 share still reads 0.33 — not a
+miss: below about five projected points the zero atom is 45–75% of the
+distribution, so "P(actual ≤ the 10th percentile)" is the atom itself.
+Coverage is only a meaningful check at quantiles outside the atom, which
+the top-12 slice is.
+
+The fitted zero shares are the availability story in one line: QB bands at
+projection 0.8 / 2.0 / 14.2 / 17.4 / 21.1 have zero shares 0.76 / 0.73 /
+0.11 / 0.02 / 0.01; RB 0.75 → 0.015; TE 0.75 → 0.05; WR 0.68 → 0.025.
+
+**What changed on the board.** DEN@KC, same slate as under T19, cash
+objective: Mahomes' own tenth percentile 12.1 → **9.5**, Dobbins 5.2 →
+**2.7**, Kelce 4.1 → 2.3; lineup means ~4% lower (the bias, now carried);
+Mahomes still leads on lineup p25 (74.1), Nix second, Dobbins third. The
+live script prints which marginal it is running and, if the JSON is
+missing, that floors read ten points too kind.
+
