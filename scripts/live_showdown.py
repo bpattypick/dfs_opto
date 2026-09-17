@@ -49,7 +49,7 @@ from src.liveproj import project_live_pool  # noqa: E402
 from src.ownership import estimate_ownership, optimal_lineup  # noqa: E402
 from src.pool import from_export, load_overrides, apply_overrides, questionable  # noqa: E402
 from src.resolve import resolve_pool  # noqa: E402
-from src.scoremodel import CorrelatedScores  # noqa: E402
+from src.scoremodel import CorrelatedScores, load_marginals  # noqa: E402
 from src.showdown import Lineup, lineup_points, lineup_salary  # noqa: E402
 from src.ingest import nfl_stats  # noqa: E402
 from src.ingest.dk_salaries import parse_dk_export, parse_slate_filename  # noqa: E402
@@ -212,10 +212,16 @@ def main(argv=None) -> int:
     # T19: one candidate per plausible captain, chosen on floor/ceiling rather
     # than mean, each with its exact best complement -- so the contest sim
     # below is comparing captains, not re-ranking one captain's variants.
-    scores = CorrelatedScores(pool[["player_id", "position", "team", "projection"]])
+    marginals = load_marginals()
+    scores = CorrelatedScores(pool[["player_id", "position", "team", "projection"]],
+                              marginals=marginals)
+    print(f"score marginals: {scores.kind}"
+          + (f" (fitted on {marginals.fitted_on})" if marginals is not None else
+             " -- data/score_marginals.json missing; floors read ~10 percentile points too kind (T24)"))
     quantile_col = OBJECTIVES[args.objective][0]
     board = captain_board(pool, scores.players, scores, objective=args.objective,
-                          n_captains=args.captains, trials=args.trials, seed=args.seed)
+                          n_captains=args.captains, trials=args.trials, seed=args.seed,
+                          marginals=marginals)
     print(f"\ncaptain board ({args.objective}: ordered by lineup {quantile_col}; "
           f"each row is the best lineup around that captain)")
     print(f"     {'captain':<22}{'pos':<4}{'proj':>6}{'sd':>6}{'p10':>6}{'p90':>6}  |"

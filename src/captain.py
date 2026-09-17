@@ -37,7 +37,7 @@ import numpy as np
 import pandas as pd
 
 from src import contest
-from src.scoremodel import lognormal_params, sd_for
+from src.scoremodel import EmpiricalMarginals, lognormal_params, sd_for
 from src.showdown import CAPTAIN_MULTIPLIER, FLEX_SLOTS, SALARY_CAP, Lineup
 
 # Standard-normal quantiles; scipy is deliberately not a dependency.
@@ -77,18 +77,28 @@ def _check_pool(pool: pd.DataFrame) -> pd.DataFrame:
     return pool.reset_index(drop=True)
 
 
-def player_quantiles(pool: pd.DataFrame, quantiles=QUANTILES) -> pd.DataFrame:
-    """Per player: projection, fitted sd, and the lognormal quantiles asked for.
+def player_quantiles(pool: pd.DataFrame, quantiles=QUANTILES,
+                     marginals: EmpiricalMarginals | None = None) -> pd.DataFrame:
+    """Per player: projection, spread, and the quantiles asked for.
 
-    Same marginal the score simulator draws from, so a captain's "floor" here
-    is exactly the tenth percentile the contest sim would produce for him.
+    Same marginal the score simulator draws from -- the fitted empirical one
+    when ``marginals`` is given (T24), the lognormal otherwise -- so a
+    captain's "floor" here is exactly the tenth percentile the contest sim
+    would produce for him.
     """
     p = _check_pool(pool)
-    mean = p["projection"].to_numpy(dtype=float).clip(0.05, None)
+    out = p[["player_id", "team", "position", "salary", "projection"]].copy()
+    proj = p["projection"].to_numpy(dtype=float)
+    if marginals is not None:
+        out["sd"] = [marginals.sd(pos, m) for m, pos in zip(proj, p["position"])]
+        for q in quantiles:
+            out[_column(q)] = [float(marginals.quantile(pos, m, q))
+                               for m, pos in zip(proj, p["position"])]
+        return out
+    mean = proj.clip(0.05, None)
     sd = np.array([sd_for(m, pos) for m, pos in zip(mean, p["position"])])
     params = [lognormal_params(m, s) for m, s in zip(mean, sd)]
     mu = np.array([a for a, _ in params]); sigma = np.array([b for _, b in params])
-    out = p[["player_id", "team", "position", "salary", "projection"]].copy()
     out["sd"] = sd
     for q in quantiles:
         if q not in Z:
@@ -144,6 +154,7 @@ def captain_candidates(
     objective: str = "cash",
     n_captains: int = 10,
     cap: int = SALARY_CAP,
+    marginals: EmpiricalMarginals | None = None,
 ) -> list[Lineup]:
     """One lineup per plausible captain: top ``n_captains`` by the objective's
     quantile, union the top by mean projection. Captains with no legal
@@ -151,7 +162,7 @@ def captain_candidates(
     if objective not in OBJECTIVES:
         raise CaptainError(f"unknown objective {objective!r}; choose from {sorted(OBJECTIVES)}")
     col = OBJECTIVES[objective][0]
-    q = player_quantiles(pool)
+    q = player_quantiles(pool, marginals=marginals)
     picks = list(q.sort_values(col, ascending=False)["player_id"].head(n_captains))
     for pid in q.sort_values("projection", ascending=False)["player_id"].head(n_captains):
         if pid not in picks:
@@ -210,15 +221,18 @@ def captain_board(
     n_captains: int = 10,
     trials: int = 4000,
     seed: int | None = None,
+    marginals: EmpiricalMarginals | None = None,
 ) -> pd.DataFrame:
     """The decision table: per candidate captain, his own floor/ceiling and
     the best lineup built around him with its floor/median/ceiling, ordered
-    by the objective. Empty if no captain has a legal complement."""
-    lineups = captain_candidates(pool, objective=objective, n_captains=n_captains)
+    by the objective. Empty if no captain has a legal complement. Pass the
+    same ``marginals`` the score model was built with so both agree."""
+    lineups = captain_candidates(pool, objective=objective, n_captains=n_captains,
+                                 marginals=marginals)
     if not lineups:
         return pd.DataFrame()
     ranked = rank_lineups(lineups, players, draw_scores, trials=trials, seed=seed).ordered(objective)
-    q = player_quantiles(pool).set_index("player_id")
+    q = player_quantiles(pool, marginals=marginals).set_index("player_id")
     ranked["cpt_projection"] = ranked["captain"].map(q["projection"])
     ranked["cpt_sd"] = ranked["captain"].map(q["sd"])
     ranked["cpt_p10"] = ranked["captain"].map(q["p10"])
