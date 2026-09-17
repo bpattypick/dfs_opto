@@ -199,9 +199,94 @@ def _by_position(**kw):
     return CalibratedAverage(per_position=True, name="calibrated_by_position", **kw)
 
 
+# Depth beyond which the role is "deep bench" for projection purposes.
+RANK_CAP = {"QB": 2, "RB": 3, "WR": 4, "TE": 2, "DST": 1}
+
+
+def role_bucket(position, eff_rank) -> str:
+    """'QB1', 'RB3', 'WR4' ... or 'WR?' when the rank is unknown."""
+    if eff_rank is None or (isinstance(eff_rank, float) and np.isnan(eff_rank)):
+        return f"{position}?"
+    cap = RANK_CAP.get(position, 3)
+    return f"{position}{min(int(eff_rank), cap)}"
+
+
+@dataclass
+class RoleAware:
+    """v4: the trailing average, conditioned on the role held *this week*.
+
+    T23 measured the failure the trailing average cannot see: 28% of dressed
+    skill players score 0 and are projected 4.2 anyway; a backup QB with a
+    starter's history is a top-12 projection in a third of games. The history
+    says what a player did; nothing in it says whether he holds that role now.
+
+    This model asks for roster-mode history (``history_pool``): zero rows for
+    dressed-but-silent weeks, and ``eff_rank`` — the player's ordinal among
+    dressed teammates at the position — on every row and on the slate. Then:
+
+    1. A prior per role bucket (QB1, QB2, RB1..RB3, WR1..WR4, TE1, TE2, DST1)
+       from the time-boxed history: what a dressed player in that role scores,
+       zeros included. Estimated fresh each week from history only.
+    2. The player's own trailing mean over history rows *in the same bucket he
+       holds now*. A demoted starter has none at his new rank; a rookie thrust
+       into RB1 has none at all.
+    3. Shrink own mean toward the bucket prior by n / (n + k). No same-role
+       games -> the prior. Seventeen -> mostly himself.
+    4. The week's injury listing: Out -> 0, Doubtful and Questionable scaled.
+
+    A player without role columns (played-mode history) is refused rather
+    than silently projected as a trailing average.
+    """
+
+    window: int = 17
+    k: float = 3.0
+    doubtful: float = 0.25
+    questionable: float = 1.0
+    name: str = "role_aware"
+    history_pool: str = "roster"
+    last_priors: dict | None = None
+
+    def project(self, history: pd.DataFrame, slate: pd.DataFrame) -> pd.DataFrame:
+        _check_inputs(history, slate)
+        for frame, label in ((history, "history"), (slate, "slate")):
+            if "eff_rank" not in frame.columns:
+                raise ProjectionError(f"role_aware needs role columns in {label}; run with pool='roster'")
+        if self.k < 0:
+            raise ProjectionError("k must be non-negative")
+
+        hist = history.copy()
+        hist["bucket"] = [role_bucket(p, r) for p, r in zip(hist["position"], hist["eff_rank"])]
+        priors = hist.groupby("bucket")["dk_points"].mean()
+        pos_mean = hist.groupby("position")["dk_points"].mean()
+        self.last_priors = {k: float(v) for k, v in priors.items()}
+
+        cols = ["player_id", "position", "eff_rank"] + (["injury_status"] if "injury_status" in slate else [])
+        out = slate[cols].copy()
+        out["bucket"] = [role_bucket(p, r) for p, r in zip(out["position"], out["eff_rank"])]
+
+        same_role = hist.merge(out[["player_id", "bucket"]], on=["player_id", "bucket"], how="inner")
+        trailing = _trailing(same_role, self.window) if len(same_role) else \
+            pd.DataFrame(columns=["trailing_mean", "n_games"])
+        out = out.merge(trailing, left_on="player_id", right_index=True, how="left")
+        out["n_games"] = out["n_games"].fillna(0).astype(float)
+        out["prior"] = (out["bucket"].map(priors)
+                        .fillna(out["position"].map(pos_mean))
+                        .fillna(0.0))
+
+        w = out["n_games"] / (out["n_games"] + self.k) if self.k > 0 else (out["n_games"] > 0).astype(float)
+        proj = w * out["trailing_mean"].fillna(0.0) + (1 - w) * out["prior"]
+
+        if "injury_status" in out:
+            mult = out["injury_status"].map({"Out": 0.0, "Doubtful": self.doubtful,
+                                             "Questionable": self.questionable}).fillna(1.0)
+            proj = proj * mult
+        return pd.DataFrame({"player_id": out["player_id"], "projection": proj})
+
+
 MODELS: dict = {
     PriorAverage.name: PriorAverage,
     ShrunkVegas.name: ShrunkVegas,
     CalibratedAverage.name: CalibratedAverage,
     "calibrated_by_position": _by_position,
+    RoleAware.name: RoleAware,
 }

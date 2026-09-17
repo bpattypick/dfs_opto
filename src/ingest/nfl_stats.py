@@ -296,6 +296,161 @@ def load_rosters(conn, seasons: list[int], refresh: bool = False, cfg=None) -> i
     return db.upsert_df(conn, "rosters", pd.concat(frames, ignore_index=True))
 
 
+# --- roles: depth charts + injury reports (T22) --------------------------------
+
+INJURY_STATUSES = ("Out", "Doubtful", "Questionable")
+# A daily depth-chart snapshot is attached to a kickoff at most this far ahead.
+DEPTH_SNAPSHOT_MAX_AGE = pd.Timedelta(days=8)
+
+
+def _depth_from_weekly_format(frame: pd.DataFrame, season_types: list[str]) -> pd.DataFrame:
+    """Through 2024: one row per (week, player, slot); depth_team is the rank.
+
+    Starters at a multi-slot position tie (two WRs at depth_team 1). A player
+    listed in several slots keeps his best rank.
+    """
+    f = frame[frame["game_type"].isin(season_types)].copy()
+    f = f[f["formation"].astype(str).str.strip().str.lower() == "offense"]
+    f["position"] = f["position"].map(normalize_position)
+    f = f[f["position"].isin(FANTASY_POSITIONS)].dropna(subset=["gsis_id", "week"])
+    f["depth_rank"] = pd.to_numeric(f["depth_team"], errors="coerce")
+    f = f.dropna(subset=["depth_rank"])
+    out = pd.DataFrame({
+        "player_id": f["gsis_id"],
+        "season": f["season"].astype(int),
+        "week": f["week"].astype(int),
+        "team": f["club_code"].map(teams_mod.normalize_team),
+        "position": f["position"],
+        "depth_rank": f["depth_rank"].astype(int),
+        "depth_as_of": "week",
+    })
+    return (out.sort_values("depth_rank")
+               .drop_duplicates(subset=["player_id", "season", "week"], keep="first"))
+
+
+def _depth_from_daily_format(frame: pd.DataFrame, games: pd.DataFrame) -> pd.DataFrame:
+    """From 2025: daily dated snapshots. Use the last one before each team's kickoff.
+
+    pos_rank is an ordinal within the position group across slots, so a
+    player's rank is his minimum over the rows of one snapshot. Teams on bye
+    have no kickoff that week and get no rows -- they are not in any pool.
+    """
+    f = frame.copy()
+    f["dt"] = pd.to_datetime(f["dt"], utc=True, errors="coerce")
+    f["position"] = f["pos_abb"].map(normalize_position)
+    f = f[f["position"].isin(FANTASY_POSITIONS)].dropna(subset=["gsis_id", "dt"])
+    f["team"] = f["team"].map(teams_mod.normalize_team)
+    f = f.dropna(subset=["team"])
+
+    kicks = games.dropna(subset=["kickoff_utc"]).copy()
+    kicks["kickoff"] = pd.to_datetime(kicks["kickoff_utc"], utc=True, errors="coerce")
+    kicks = pd.concat([
+        kicks[["season", "week", "home_team", "kickoff"]].rename(columns={"home_team": "team"}),
+        kicks[["season", "week", "away_team", "kickoff"]].rename(columns={"away_team": "team"}),
+    ]).dropna(subset=["kickoff"]).sort_values("kickoff")
+
+    snaps = f[["team", "dt"]].drop_duplicates().sort_values("dt")
+    # For each (team, game): the newest snapshot strictly before kickoff, and
+    # no older than a week -- a snapshot describes the coming game, not every
+    # game left on the schedule. (The live season's newest snapshot would
+    # otherwise be pinned to all remaining weeks until each is republished.)
+    chosen = pd.merge_asof(kicks, snaps, left_on="kickoff", right_on="dt", by="team",
+                           direction="backward", allow_exact_matches=False,
+                           tolerance=DEPTH_SNAPSHOT_MAX_AGE)
+    chosen = chosen.dropna(subset=["dt"])[["season", "week", "team", "dt"]]
+
+    rows = f.merge(chosen, on=["team", "dt"], how="inner")
+    rows["depth_rank"] = pd.to_numeric(rows["pos_rank"], errors="coerce")
+    rows = rows.dropna(subset=["depth_rank"])
+    out = pd.DataFrame({
+        "player_id": rows["gsis_id"],
+        "season": rows["season"].astype(int),
+        "week": rows["week"].astype(int),
+        "team": rows["team"],
+        "position": rows["position"],
+        "depth_rank": rows["depth_rank"].astype(int),
+        "depth_as_of": rows["dt"].dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
+    return (out.sort_values("depth_rank")
+               .drop_duplicates(subset=["player_id", "season", "week"], keep="first"))
+
+
+def _transform_depth_charts(raw: pd.DataFrame, games: pd.DataFrame, season_types) -> pd.DataFrame:
+    if "dt" in raw.columns:
+        return _depth_from_daily_format(raw, games)
+    return _depth_from_weekly_format(raw, season_types)
+
+
+def _transform_injuries(raw: pd.DataFrame, season_types: list[str]) -> pd.DataFrame:
+    f = raw[raw["game_type"].isin(season_types)].copy()
+    f = f.dropna(subset=["gsis_id", "week"])
+    f["report_status"] = f["report_status"].where(f["report_status"].isin(INJURY_STATUSES))
+    out = pd.DataFrame({
+        "player_id": f["gsis_id"],
+        "season": f["season"].astype(int),
+        "week": f["week"].astype(int),
+        "team": f["team"].map(teams_mod.normalize_team),
+        "position": f["position"].map(normalize_position),
+        "injury_status": f["report_status"],
+        "practice_status": f["practice_status"].astype(str).str.strip().replace({"": None, "None": None, "nan": None}),
+    })
+    # Keep the most severe listing if a player appears twice in a week.
+    severity = {"Out": 0, "Doubtful": 1, "Questionable": 2}
+    out["_sev"] = out["injury_status"].map(severity).fillna(3)
+    return (out.sort_values("_sev").drop_duplicates(subset=["player_id", "season", "week"], keep="first")
+               .drop(columns="_sev"))
+
+
+def _merge_roles(depth: pd.DataFrame, injuries: pd.DataFrame) -> pd.DataFrame:
+    """One row per (player, week): depth chart rank and/or injury listing."""
+    keys = ["player_id", "season", "week"]
+    merged = depth.merge(injuries, on=keys, how="outer", suffixes=("", "_inj"))
+    for col in ("team", "position"):
+        if f"{col}_inj" in merged.columns:
+            merged[col] = merged[col].fillna(merged[f"{col}_inj"])
+            merged = merged.drop(columns=f"{col}_inj")
+    for col in ("depth_rank", "depth_as_of", "injury_status", "practice_status"):
+        if col not in merged.columns:
+            merged[col] = None
+    merged = merged[merged["position"].isin(FANTASY_POSITIONS)]
+    return merged.dropna(subset=["team"])[
+        keys + ["team", "position", "depth_rank", "depth_as_of", "injury_status", "practice_status"]
+    ]
+
+
+def load_roles(conn, seasons: list[int], refresh: bool = False, cfg=None) -> int:
+    """Depth chart + injury report per (player, week). A missing file warns and is skipped."""
+    cfg = cfg or config_mod.load()
+    season_types = cfg.get("seasons.season_types", ["REG"])
+    games = pd.read_sql_query(
+        "SELECT season, week, home_team, away_team, kickoff_utc FROM games", conn
+    )
+    frames = []
+    for season in seasons:
+        try:
+            depth = _transform_depth_charts(
+                nflverse.depth_charts(season, refresh=refresh, cfg=cfg),
+                games[games["season"] == season], season_types,
+            )
+        except nflverse.NflverseUnavailable as exc:
+            log.warning("skipping depth charts for %s: %s", season, exc)
+            depth = pd.DataFrame(columns=["player_id", "season", "week", "team", "position",
+                                          "depth_rank", "depth_as_of"])
+        try:
+            inj = _transform_injuries(nflverse.injuries(season, refresh=refresh, cfg=cfg),
+                                      season_types)
+        except nflverse.NflverseUnavailable as exc:
+            log.warning("skipping injuries for %s: %s", season, exc)
+            inj = pd.DataFrame(columns=["player_id", "season", "week", "team", "position",
+                                        "injury_status", "practice_status"])
+        if depth.empty and inj.empty:
+            continue
+        frames.append(_merge_roles(depth, inj))
+    if not frames:
+        return 0
+    return db.upsert_df(conn, "roles", pd.concat(frames, ignore_index=True))
+
+
 # --- players ------------------------------------------------------------------
 
 
@@ -352,6 +507,7 @@ def ingest(conn, seasons: list[int], refresh: bool = False, cfg=None) -> dict[st
         "dst_week_stats": db.upsert_df(conn, "dst_week_stats", dst) if len(dst) else 0,
         "players": db.upsert_df(conn, "players", _players_table(stats)),
         "rosters": load_rosters(conn, seasons, refresh=refresh, cfg=cfg),
+        "roles": load_roles(conn, seasons, refresh=refresh, cfg=cfg),
     }
     for table, n in counts.items():
         log.info("%s: %d rows", table, n)
@@ -398,6 +554,10 @@ def ingest_status(conn, season: int, now: datetime | None = None) -> dict:
         "SELECT MAX(week) AS w FROM rosters WHERE season = ?", conn, params=(season,)
     )
     last_roster = rosters["w"].iloc[0]
+    roles = pd.read_sql_query(
+        "SELECT MAX(week) AS w FROM roles WHERE season = ?", conn, params=(season,)
+    )
+    last_role = roles["w"].iloc[0]
 
     return {
         "season": season,
@@ -406,6 +566,7 @@ def ingest_status(conn, season: int, now: datetime | None = None) -> dict:
         "last_completed_week": max(completed) if completed else None,
         "missing_weeks": [w for w in completed if w not in ingested],
         "last_roster_week": int(last_roster) if pd.notna(last_roster) else None,
+        "last_role_week": int(last_role) if pd.notna(last_role) else None,
     }
 
 
@@ -413,9 +574,11 @@ def format_status(status: dict) -> str:
     li = status["last_ingested_week"]
     lc = status["last_completed_week"]
     lr = status.get("last_roster_week")
+    lo = status.get("last_role_week")
     line = (f"{status['season']}: ingested through week {li if li is not None else '-'}; "
             f"completed through week {lc if lc is not None else '-'}; "
-            f"rosters through week {lr if lr is not None else '-'}")
+            f"rosters through week {lr if lr is not None else '-'}; "
+            f"depth charts/injuries through week {lo if lo is not None else '-'}")
     if status["missing_weeks"]:
         line += (f"\n!! completed week(s) {status['missing_weeks']} not yet published by "
                  "nflverse (usually by Tuesday) -- re-run before building a lineup")

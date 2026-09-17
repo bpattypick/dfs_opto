@@ -98,6 +98,26 @@ def raw_rosters(season: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def raw_depth(season: int) -> pd.DataFrame:
+    weeks = [1, 2] if season == 2026 else [17, 18]
+    return pd.DataFrame([
+        dict(season=season, club_code="SEA", week=float(w), game_type="REG", depth_team="1",
+             formation="Offense", gsis_id="00-qb", position="QB", depth_position="QB",
+             full_name="Sam Darnold")
+        for w in weeks
+    ])
+
+
+def raw_injuries(season: int) -> pd.DataFrame:
+    weeks = [1, 2] if season == 2026 else [17, 18]
+    return pd.DataFrame([
+        dict(season=season, game_type="REG", team="SEA", week=w, gsis_id="00-wr", position="WR",
+             full_name="Jaxon Smith-Njigba", report_status="Questionable",
+             practice_status="Limited Participation in Practice")
+        for w in weeks
+    ])
+
+
 @pytest.fixture
 def conn():
     conn = db.connect(":memory:")
@@ -117,6 +137,10 @@ def sources(monkeypatch):
                         lambda season, refresh=False, cfg=None, today=None: raw_snaps(season))
     monkeypatch.setattr(nflverse, "weekly_rosters",
                         lambda season, refresh=False, cfg=None, today=None: raw_rosters(season))
+    monkeypatch.setattr(nflverse, "depth_charts",
+                        lambda season, refresh=False, cfg=None, today=None: raw_depth(season))
+    monkeypatch.setattr(nflverse, "injuries",
+                        lambda season, refresh=False, cfg=None, today=None: raw_injuries(season))
 
 
 def stats(conn) -> pd.DataFrame:
@@ -220,7 +244,9 @@ class TestIngestStatus:
         nfl_stats.ingest(conn, [SEASON])
         status = nfl_stats.ingest_status(conn, SEASON, now=self.at("2026-09-17T12:00:00"))
         assert status["last_roster_week"] == 2
+        assert status["last_role_week"] == 2
         assert "rosters through week 2" in nfl_stats.format_status(status)
+        assert "depth charts/injuries through week 2" in nfl_stats.format_status(status)
 
     def test_a_completed_but_unpublished_week_is_flagged(self, conn, sources):
         nfl_stats.ingest(conn, [SEASON])

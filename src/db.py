@@ -169,6 +169,27 @@ CREATE TABLE IF NOT EXISTS rosters (
     PRIMARY KEY (player_id, season, week)
 );
 
+CREATE TABLE IF NOT EXISTS roles (
+    -- ADDITION (T22): the role a player held going into a week, from the
+    -- last depth chart published before his team's kickoff and the week's
+    -- injury report. Both are pre-lock facts. depth_rank is the feed's own
+    -- number (old format: depth_team, where starters tie at 1; new format:
+    -- pos_rank, an ordinal within the position group) -- the comparable
+    -- quantity, rank among *dressed* teammates, is computed in
+    -- src.backtest.history from this plus rosters. NULL depth_rank means the
+    -- player was on the injury report but not the depth chart.
+    player_id       TEXT,
+    season          INTEGER,
+    week            INTEGER,
+    team            TEXT,
+    position        TEXT,
+    depth_rank      INTEGER,
+    depth_as_of     TEXT,             -- snapshot timestamp (new format) or 'week' (old)
+    injury_status   TEXT,             -- Out/Doubtful/Questionable/NULL
+    practice_status TEXT,
+    PRIMARY KEY (player_id, season, week)
+);
+
 CREATE TABLE IF NOT EXISTS entries (
     -- Experiment ledger, one row per contest entry (roadmap v2 Step 1). This
     -- is the measurement layer: without it, process improvements and variance
@@ -202,6 +223,7 @@ CREATE INDEX IF NOT EXISTS idx_proj_season_week ON projections (season, week);
 CREATE INDEX IF NOT EXISTS idx_xwalk_player     ON id_crosswalk (player_id);
 CREATE INDEX IF NOT EXISTS idx_entries_report   ON entries (contest_type, model_version);
 CREATE INDEX IF NOT EXISTS idx_rosters_week     ON rosters (season, week, team);
+CREATE INDEX IF NOT EXISTS idx_roles_week       ON roles (season, week, team);
 """
 
 TABLES = (
@@ -211,6 +233,7 @@ TABLES = (
     "player_week_stats",
     "dst_week_stats",
     "rosters",
+    "roles",
     "salaries",
     "projections",
     "odds_snapshots",

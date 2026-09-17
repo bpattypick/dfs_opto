@@ -147,7 +147,9 @@ def _week_rows(
     pool: str,
 ) -> pd.DataFrame:
     """Every pool row for the week, flagged ``evaluated`` where the model is scored."""
-    past = history.as_of(conn, season, week)
+    # A model may ask for roster-mode history (zero rows for dressed-but-silent
+    # weeks, role columns); everyone else gets the original frame.
+    past = history.as_of(conn, season, week, pool=getattr(model, "history_pool", "played"))
     if past.empty:
         raise BacktestError(f"no history before {season} week {week}")
     slate = history.slate(conn, season, week, pool=pool)

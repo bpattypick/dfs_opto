@@ -61,6 +61,15 @@ SNAP_COUNT_URLS = (
 WEEKLY_ROSTER_URLS = (
     _RELEASE + "/weekly_rosters/roster_weekly_{season}.parquet",
 )
+# Two formats: through 2024 one row per (week, player, slot) with depth_team as
+# the rank; from 2025 daily dated snapshots (dt) with pos_rank. See
+# src.ingest.nfl_stats._transform_depth_charts.
+DEPTH_CHART_URLS = (
+    _RELEASE + "/depth_charts/depth_charts_{season}.parquet",
+)
+INJURY_URLS = (
+    _RELEASE + "/injuries/injuries_{season}.parquet",
+)
 GAMES_URLS = (
     "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv",
     "http://www.habitatring.com/games.csv",
@@ -211,6 +220,22 @@ def weekly_rosters(season: int, refresh: bool = False, cfg=None, today: date | N
     """
     urls = tuple(u.format(season=season) for u in WEEKLY_ROSTER_URLS)
     path = _cached(urls, f"roster_weekly_{season}.parquet", refresh, cfg,
+                   live=is_live_season(season, today), today=today)
+    return pd.read_parquet(path)
+
+
+def depth_charts(season: int, refresh: bool = False, cfg=None, today: date | None = None) -> pd.DataFrame:
+    """Team depth charts for one season (T22's role source). Format differs by season."""
+    urls = tuple(u.format(season=season) for u in DEPTH_CHART_URLS)
+    path = _cached(urls, f"depth_charts_{season}.parquet", refresh, cfg,
+                   live=is_live_season(season, today), today=today)
+    return pd.read_parquet(path)
+
+
+def injuries(season: int, refresh: bool = False, cfg=None, today: date | None = None) -> pd.DataFrame:
+    """Weekly injury reports for one season: report_status Out/Doubtful/Questionable."""
+    urls = tuple(u.format(season=season) for u in INJURY_URLS)
+    path = _cached(urls, f"injuries_{season}.parquet", refresh, cfg,
                    live=is_live_season(season, today), today=today)
     return pd.read_parquet(path)
 
