@@ -2,8 +2,8 @@
 
 The first script to wire the whole chain together rather than one piece at a
 time: pool.from_export (T11/T12) -> src.resolve (T14 wedge) ->
-src.liveproj (v3, T18) -> src.ownership (T15, jitter calibrated to 0.5) ->
-src.field -> src.scoremodel (T13) -> src.duplication.
+src.liveproj (v4 role-aware, T22) -> src.ownership (T15, jitter calibrated to
+0.5) -> src.field -> src.scoremodel (T13) -> src.duplication.
 
 Output ranks candidates by dup-adjusted ROI against a SYNTHETIC payout table —
 there is no real one until a specific contest is chosen, so the ROI numbers
@@ -18,7 +18,8 @@ a trailing average, so it is only as good as the last week in the database,
 and before T21 that was last season. ``--no-ingest`` skips it (offline use).
 
 Everything below is genuinely first-run-on-real-data:
-  - v3 projections have never driven a lineup before (only backtested)
+  - v4 role-aware projections have never driven a lineup before (T22: backtested
+    on the full dressed roster, 2020-2025; the previous v3 lost twice live)
   - the correlated score model has never driven a lineup before (only
     validated against historical stack covariance)
   - the field/duplication numbers still carry T15's ~6x understatement
@@ -82,31 +83,40 @@ def build_pool(export_path: str, season: int, week: int) -> pd.DataFrame:
     overrides_path = config_mod.load().path("projection_overrides")
     try:
         overrides = load_overrides(overrides_path, slate_id)
-        if len(overrides):
-            print(f"applying {len(overrides)} committed projection override(s)")
-        pool = apply_overrides(pool, overrides)
     except FileNotFoundError:
-        pass
+        overrides = None
 
     with db.session() as conn:
         resolved = resolve_pool(conn, pool)
         resolved_n = resolved["gsis_id"].notna().sum()
         projected = project_live_pool(conn, resolved, season=season, week=week)
-    v3_n = (projected["proj_source"] == "v3").sum()
-    changed = projected[projected["proj_source"] == "team_changed"]
+    v4_n = (projected["proj_source"] == "v4").sum()
     print(f"resolved {resolved_n}/{len(projected)} to history; "
-          f"{v3_n} projected with v3, {len(projected) - v3_n - len(changed)} on "
-          f"AvgPointsPerGame, {len(changed)} on team_changed (v3 refused)")
-    if len(changed):
-        print(f"\n!! TEAM CHANGE SINCE LAST DATA — v3 refused, review before trusting "
-              f"AvgPointsPerGame either (same stale-role blind spot):")
-        for _, r in changed.iterrows():
-            print(f"     {r['name']:<22}{r['team']:<5}AvgPointsPerGame={r['projection']:.1f}"
-                  f"  -- check current depth-chart role before using this number")
-        print(f"     Fix with a committed override in data/projection_overrides.csv "
-              f"if you know their real role.\n")
-    else:
-        print()
+          f"{v4_n} projected with v4 (role-aware), {len(projected) - v4_n} on AvgPointsPerGame")
+
+    # A committed override is the owner's explicit read and wins over the
+    # model -- applied AFTER projection (before T22 it ran first and v3 then
+    # overwrote it for anyone it could project), and labelled so it is visible.
+    if overrides is not None and len(overrides):
+        print(f"applying {len(overrides)} committed projection override(s) over the model")
+        projected = apply_overrides(projected, overrides)
+        projected.loc[projected["name"].isin(overrides["dk_name"]), "proj_source"] = "override"
+
+    # T22: the role each projection rests on, for the players that decide a
+    # Showdown slate. A backup QB at rank 2 should read as a small number here;
+    # if the depth chart is wrong (it happens), this is where to see it and
+    # fix it with a committed override.
+    top = projected.sort_values("salary", ascending=False).head(16)
+    print("\nrole behind each projection (top 16 by salary):")
+    print(f"     {'player':<22}{'team':<5}{'pos':<4}{'depth':>6}{'rank':>5}  {'injury':<13}{'proj':>6}  source")
+    for _, r in top.iterrows():
+        depth = "-" if pd.isna(r.get("depth_rank")) else f"{int(r['depth_rank'])}"
+        rank = "-" if pd.isna(r.get("eff_rank")) else f"{int(r['eff_rank'])}"
+        inj = r.get("injury_status") or ""
+        flag = "  TEAM CHANGE" if bool(r.get("team_changed", False)) else ""
+        print(f"     {r['name']:<22}{r['team']:<5}{r['position']:<4}{depth:>6}{rank:>5}  {inj:<13}"
+              f"{r['projection']:>6.1f}  {r['proj_source']}{flag}")
+    print()
 
     floored = projected[projected["salary"] >= SALARY_FLOOR].reset_index(drop=True)
     if len(floored) < len(projected):
@@ -202,15 +212,14 @@ def main(argv=None) -> int:
     for i, row in table.head(args.top).iterrows():
         lu = row["lineup"]
         proj = lineup_points(lu, dict(zip(pool.player_id, pool.projection)))
-        flags = " ".join(f"[{src[p]}]" for p in lu.players if src[p] != "v3")
+        flags = " ".join(f"[{src[p]}]" for p in lu.players if src[p] != "v4")
         print(f"{i+1:<5}{proj:>7.1f}{row['dup_rate']*100:>6.2f}%{row['dup_roi']:>+9.1%}"
               f"{row['raw_roi']:>+9.1%}{row['cash_rate']*100:>6.1f}%{row['top1_rate']*100:>6.1f}%"
               f"{row['win_rate']*100:>6.1f}%{row['solo_win_rate']*100:>6.2f}%  CPT {name[lu.captain]}")
         print(f"      {' / '.join(name[x] for x in lu.flex)}"
               + (f"   {flags}" if flags else ""))
-    print("\n[avg_points] = AvgPointsPerGame, not v3 (unresolved to history).")
-    print("[team_changed] = v3 REFUSED, AvgPointsPerGame also unreliable -- see the "
-          "warning above, review this player's real role before trusting the lineup.")
+    print("\n[avg_points] = AvgPointsPerGame, not v4 (unresolved to history, or a kicker).")
+    print("[override] = committed owner override in data/projection_overrides.csv, wins over v4.")
     return 0
 
 

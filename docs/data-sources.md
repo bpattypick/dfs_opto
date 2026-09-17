@@ -972,7 +972,7 @@ and the top-12 slice now print on every run so that cannot happen again.
 The excluded-for-no-history share is 3.1% of actual points on both pools:
 rookies with no games are a small leak, not the problem.
 
-**Caveats, stated.** (a) The roster pool treats gameday inactives as known,
+**Caveats, stated (T23).** (a) The roster pool treats gameday inactives as known,
 which is true for a Showdown lock (kickoff) and not for a main-slate early
 game — right for the current scope, to be revisited if Classic ever comes
 back in. (b) `min_games` still gates who is scored, so a T22 model that
@@ -980,3 +980,103 @@ supplies a prior for no-history players will need `--min-games 0` to be
 scored on them; the coverage block shows what is being left out either
 way. (c) 2026 week 2 rosters are in the table but not evaluated (no stats
 yet); the harness keys on stat weeks.
+
+## The role layer (T22): the first model that beats the baseline on the honest pool
+
+T23 said availability and role were the whole gap. T22 builds them from two
+free nflverse feeds, both archived per season like everything else:
+
+**Depth charts come in two formats, and the numbers mean different things.**
+Through 2024: one row per (week, player, slot) with `depth_team` as the
+rank, and starters *tie* — a team lists two WRs at depth 1, two at 2.
+From 2025: **daily** dated snapshots (`dt`, ~07:15 UTC, 219 days for KC in
+2025) with `pos_rank`, an **ordinal within the position group across
+slots** (KC 2025-11-01: Rice 1, Worthy 2, Brown 3, JuJu 4 …), so a player
+in several slots takes his minimum. A week uses the last snapshot with
+`dt` strictly before that team's kickoff — leakage-safe by construction —
+and never one older than eight days, otherwise the live season's newest
+snapshot gets pinned to every remaining week on the schedule (it did,
+until that rule went in). The stored `depth_rank` is the feed's own number;
+the comparable quantity is computed downstream.
+
+**Injury reports** are weekly (`report_status` Out / Doubtful / Questionable;
+most severe listing wins if a player appears twice). Only the 2019–2024
+files carry `date_modified`; 2025+ do not, so the report cannot be
+timestamp-checked against kickoff. It is the week's final report by the
+feed's construction, and that is stated rather than verified.
+
+**Effective rank, and zero rows.** The number the model uses is
+`eff_rank`: the player's ordinal among *dressed* teammates at the position,
+ordered by depth rank, then prior snap share (strictly-before, zeros
+counted), then id. That resolves the old format's ties with what was
+knowable, makes both formats comparable, and — because it is computed over
+the dressed — puts a rookie RB at rank 1 when the two ahead of him are
+inactive (Price). Roster-mode history also carries a **zero row for every
+week a player dressed without a stat line**, so a backup's trailing average
+is what he produced when dressed. Played-mode history is byte-for-byte
+unchanged. Coverage: 91–96% of dressed skill players have a depth rank in
+2019–2024, 99% from 2025 (the daily feed is more complete).
+
+**The model (v4, `RoleAware`).** A prior per role bucket (QB1/QB2,
+RB1–3, WR1–4, TE1/2, DST1) estimated fresh each week from time-boxed
+history, zeros included; the player's own trailing mean over history rows
+*in the bucket he holds this week*; shrink one toward the other by
+n / (n + k), k = 3; then the week's injury listing (Out → 0, Doubtful ×
+0.25, Questionable × 1.0 — the last two are untuned defaults). A demoted
+starter has no same-role rows and projects as a backup; a rookie thrust
+into RB1 gets the RB1 prior instead of DK's 0.0; a career backup stays a
+backup because his same-role rows say so.
+
+**Backtest, roster pool, 2020–2025, 107 weeks** (baseline row as recorded
+under T23; v4 with the same `min_games 3`, and with `0` — everyone):
+
+| model              | n      | MAE  | Spearman | bias  | top-12 MAE | top-12 ρ  | top-12 bias | QB MAE | QB bias | zeros → promised |
+|--------------------|--------|------|----------|-------|------------|-----------|-------------|--------|---------|------------------|
+| prior_average      | 42,991 | 4.90 | 0.604    | +0.97 | 6.81       | 0.438     | +1.59       | 7.60   | +3.42   | 28.1% → 4.21     |
+| role_aware, mg 3   | 45,728 | 4.22 | 0.709    | +0.29 | 6.26       | **0.485** | +0.63       | 4.45   | +0.29   | 31.4% → 2.42     |
+| role_aware, mg 0   | 48,138 | 4.16 | 0.707    | +0.31 | 6.28       | 0.480     | +0.63       | 4.39   | +0.30   | 32.6% → 2.42     |
+
+Every acceptance number is cleared, and every season individually is
+better (Spearman 0.70–0.73 vs 0.60–0.63). The QB line is the DEN@KC lesson
+closed: bias +3.42 → +0.29, MAE 7.60 → 4.45. Against the play/no-play
+oracle measured under T23 (top-12 MAE 6.11, bias +0.33, ρ 0.470), v4
+reaches most of the MAE, half the bias, and *exceeds* the oracle on rank —
+the role prior also improves ordering among players who do play. With
+`min_games 0` it projects the entire pool with nothing excluded and still
+beats the baseline that excluded 5,147 players. What v4 does **not** fix:
+DST (ρ 0.13 either way — a trailing mean is not a DST model), and the
+noise floor (top-12 MAE 6.3 on players who score with sd ≈ 9).
+
+**Shipped live on the projection layer's criterion, stated.** CLAUDE.md
+says a model ships on contest-sim ROI. There are no historical DK salaries
+to simulate contests over, so — per the owner-approved plan, "validate each
+layer against its own ground truth" — the projection layer ships on the
+roster-pool backtest and ROI accrues in the ledger. `project_live_pool` now
+defaults to v4; H9 (v3 or baseline until T22) is answered by this
+measurement: neither. v3's refusal on a team change (T20) is no longer
+needed — the depth chart supplies the role — so a team-changer is projected
+and flagged rather than refused.
+
+**Live smoke, the slate that lost.** The DEN@KC export re-run with history
+before 2026 week 2 and the 2026-09-17 depth chart: Justin Fields (depth 2,
+team change) **4.3** — v3 gave him 14.6; Stidham 0.2, Ehlinger 0.2;
+Walker 13.5 and Waddle 11.6 with no hand override; Mahomes 21.5, Nix 18.9,
+Rice 17.1, Dobbins 12.7 (RB1), Harvey 5.6 (RB2). 38 of 51 pool players are
+model-backed; the 13 on `AvgPointsPerGame` are kickers and names the
+crosswalk cannot reach (Nussmeier, T14). The optimizer's top build no
+longer contains a quarterback who will not play. The CLI now prints the
+role behind each top-16 projection so a wrong depth chart is visible before
+it is trusted. Committed overrides now apply *after* the model and are
+labelled `override` — before this they ran first and the model overwrote
+them for anyone it could project, so an owner's read was silently lost for
+exactly the players it was written for.
+
+**Caveats, stated (T22).** (a) Injury multipliers are defaults, not fitted.
+(b) The bucket caps (QB 2, RB 3, WR 4, TE 2) were chosen, not searched.
+(c) `eff_rank` for the live slate is computed among the DK pool minus
+OUT/IR — the dressed roster is not known until 90 minutes before kickoff,
+so a surprise inactive shifts ranks after the projection is made; the
+committed-override mechanism remains the late fix. (d) The depth chart is
+the team's published one; teams are sometimes slow to update it, which the
+dressed-only ranking mitigates but cannot remove.
+

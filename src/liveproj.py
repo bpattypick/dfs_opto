@@ -1,31 +1,29 @@
-"""Wire a live DK pool to the validated projection: v3 where possible, the DK
-average where not.
+"""Wire a live DK pool to the validated projection.
 
-T16/T18/T14, assembled. `CalibratedAverage(per_position=True)` (v3) is
-validated on 2020-2025 to remove the top-of-board bias that decided SF@LAR
-(docs/data-sources.md, "v3 by decile"). It needs a GSIS id and enough games of
-history to run on. `src.resolve` gets most of a live pool there; whoever it
-can't reach — kickers, practice-squad depth, this week's inactive-driven
-role change — falls back to the pool's own AvgPointsPerGame rather than
-erroring, because a live slate always has a few and the fallback is exactly
-what CLAUDE.md H7 already accepted as the interim source.
+T22 makes the role-aware model (v4, ``src.projection.RoleAware``) the live
+default. It is the first model validated on the pool a Showdown entrant
+actually faces (everyone who dressed, 0 for no stat line — T23): top-12
+Spearman 0.485 vs the trailing average's 0.438, QB bias +0.29 vs +3.42.
+Two of v3's live weaknesses are gone by construction:
 
-A player `src.resolve` flags as having changed teams since our last ingested
-data is a separate, harder case and is handled first, unconditionally: their
-trailing average is a snapshot of the *role* they held at their old team, and
-nothing says that role carries over. This is not a theoretical risk — on the
-first live slate this ran on, it silently gave a bench QB a confident
-14.6-point projection built entirely from his 2025 starts at a different team.
-Such a player never gets v3, whether or not they clear ``min_games``; they
-keep the pool's own projection and are tagged ``proj_source="team_changed"``,
-a distinct value from plain ``"avg_points"`` so the CLI can flag them loudly
-rather than let them blend in with an ordinary unresolved player.
+- **No history.** v3 needed ``min_games`` and fell back to DK's
+  ``AvgPointsPerGame`` below it (Jadarian Price: 0.0 at 48% ownership). v4
+  projects a rookie thrust into RB1 at the RB1 prior.
+- **Team change.** v3 had to *refuse* (T20: a bench QB projected 14.6 from
+  his starts elsewhere) because a trailing average carries the old role. v4
+  projects from the role the player holds on *this* team's depth chart, so a
+  team-changer is projected, not refused; ``team_changed`` stays as a column
+  for the CLI to mention.
 
-Every row's provenance is kept (``proj_source``: "v3", "avg_points", or
-"team_changed") so the output never hides which projections are backed by the
-validated model, which are the same weak input that has been wrong before, and
-which are a specific, known-dangerous case that needs a human's own knowledge
-of the depth chart — exactly what caught this the first time.
+Who still falls back to the pool's own ``AvgPointsPerGame`` (``proj_source``
+``"avg_points"``): anyone ``src.resolve`` could not reach — kickers always,
+plus a name DK spells differently. A model without roster-mode history (v3,
+the baseline) keeps the pre-T22 behaviour: ``min_games`` gate, team-change
+refusal, ``proj_source`` ``"v3"`` / ``"team_changed"``.
+
+Every row keeps its provenance in ``proj_source`` and its role
+(``eff_rank``, ``depth_rank``, ``injury_status``) so the output never hides
+which numbers are model-backed and what role each rests on.
 """
 
 from __future__ import annotations
@@ -33,7 +31,61 @@ from __future__ import annotations
 import pandas as pd
 
 from src.backtest import history
-from src.projection import CalibratedAverage
+from src.projection import CalibratedAverage, RoleAware
+
+ROLE_MODEL_SOURCE = "v4"
+LEGACY_MODEL_SOURCE = "v3"
+# History has no kickers; nothing to project them from.
+UNPROJECTABLE_POSITIONS = ("K",)
+
+
+def _role_aware_overlay(conn, out: pd.DataFrame, season: int, week: int, model) -> pd.DataFrame:
+    resolvable = out["gsis_id"].notna() & ~out["position"].isin(UNPROJECTABLE_POSITIONS)
+    if not resolvable.any():
+        return out
+    past = history.as_of(conn, season, week, pool="roster")
+    if past.empty:
+        return out
+
+    slate = pd.DataFrame({
+        "player_id": out.loc[resolvable, "gsis_id"].values,
+        "team": out.loc[resolvable, "team"].values,
+        "position": out.loc[resolvable, "position"].values,
+    })
+    slate = history.attach_roles(conn, slate, season, week)
+    projected = model.project(past, slate).set_index("player_id")["projection"]
+
+    ids = out.loc[resolvable, "gsis_id"]
+    out.loc[resolvable, "projection"] = ids.map(projected).values
+    out.loc[resolvable, "proj_source"] = ROLE_MODEL_SOURCE
+    roles = slate.set_index("player_id")
+    for col in ("eff_rank", "depth_rank", "injury_status"):
+        out.loc[resolvable, col] = ids.map(roles[col]).values
+    return out
+
+
+def _legacy_overlay(conn, out: pd.DataFrame, season: int, week: int, min_games: int, model) -> pd.DataFrame:
+    if "team_changed" in out.columns:
+        changed = out["team_changed"].fillna(False).astype(bool) & out["gsis_id"].notna()
+        out.loc[changed, "proj_source"] = "team_changed"
+    else:
+        changed = pd.Series(False, index=out.index)
+
+    resolvable = out[out["gsis_id"].notna() & ~changed]
+    if resolvable.empty:
+        return out
+    past = history.as_of(conn, season, week)
+    games_played = past.groupby("player_id").size()
+    eligible_ids = set(resolvable["gsis_id"]) & set(games_played[games_played >= min_games].index)
+    if not eligible_ids:
+        return out
+    slate = pd.DataFrame({"player_id": list(eligible_ids)}).merge(
+        past[["player_id", "position"]].drop_duplicates("player_id"), on="player_id", how="left")
+    projected = model.project(past, slate).set_index("player_id")["projection"]
+    mask = out["gsis_id"].isin(eligible_ids)
+    out.loc[mask, "projection"] = out.loc[mask, "gsis_id"].map(projected)
+    out.loc[mask, "proj_source"] = LEGACY_MODEL_SOURCE
+    return out
 
 
 def project_live_pool(
@@ -42,46 +94,23 @@ def project_live_pool(
     season: int,
     week: int,
     min_games: int = 3,
-    model: CalibratedAverage | None = None,
+    model=None,
 ) -> pd.DataFrame:
-    """Overlay v3 projections onto a resolved pool. Returns pool + proj_source.
+    """Overlay model projections onto a resolved pool. Returns pool + proj_source (+ role).
 
-    ``season, week`` should be beyond everything loaded (e.g. one past the
-    last ingested season) so ``history.as_of`` pulls the model's full history
-    without excluding anything — there is no leakage risk here since nothing
-    from the target slate itself is in the database yet.
+    ``season, week`` is the slate's own week: history strictly before it is
+    what the model sees, and the week's depth chart and injury report are
+    the roles. Default model is v4 (``RoleAware``); pass a ``CalibratedAverage``
+    for the pre-T22 v3 path.
     """
-    model = model or CalibratedAverage(per_position=True)
+    model = model or RoleAware()
     out = resolved_pool.copy()
     out["proj_source"] = "avg_points"
-
-    if "team_changed" in out.columns:
-        changed = out["team_changed"].fillna(False) & out["gsis_id"].notna()
-        out.loc[changed, "proj_source"] = "team_changed"
-    else:
-        changed = pd.Series(False, index=out.index)
-
-    resolvable = out[out["gsis_id"].notna() & ~changed]
-    if resolvable.empty:
+    for col in ("eff_rank", "depth_rank", "injury_status"):
+        out[col] = pd.Series([None] * len(out), index=out.index, dtype=object)
+    if out.empty:
         return out
 
-    past = history.as_of(conn, season, week)
-    games_played = past.groupby("player_id").size()
-    eligible_ids = set(resolvable["gsis_id"]) & set(
-        games_played[games_played >= min_games].index
-    )
-    if not eligible_ids:
-        return out
-
-    slate = pd.DataFrame({
-        "player_id": list(eligible_ids),
-    }).merge(
-        past[["player_id", "position"]].drop_duplicates("player_id"),
-        on="player_id", how="left",
-    )
-    projected = model.project(past, slate).set_index("player_id")["projection"]
-
-    mask = out["gsis_id"].isin(eligible_ids)
-    out.loc[mask, "projection"] = out.loc[mask, "gsis_id"].map(projected)
-    out.loc[mask, "proj_source"] = "v3"
-    return out
+    if getattr(model, "history_pool", "played") == "roster":
+        return _role_aware_overlay(conn, out, season, week, model)
+    return _legacy_overlay(conn, out, season, week, min_games, model)

@@ -138,6 +138,8 @@ def as_of(conn: sqlite3.Connection, season: int, week: int, pool: str = "played"
     for c in ("snaps", "snap_pct", "targets", "carries", "receptions", "pass_attempts", "dk_points"):
         zeros[c] = 0.0
     hist = pd.concat([stats, zeros], ignore_index=True) if len(zeros) else stats.copy()
+    if hist.empty:
+        return pd.DataFrame(columns=list(HISTORY_COLUMNS) + list(ROLE_COLUMNS))
 
     roles = _roles(conn, _BEFORE, params)
     hist = hist.merge(roles, on=keys, how="left")
@@ -233,13 +235,20 @@ def roster_slate(conn: sqlite3.Connection, season: int, week: int) -> pd.DataFra
     totals = implied_totals(conn, season, week)
     pool = pool.merge(totals, on=["game_id", "team"], how="left")
 
-    # Roles for the week itself (pre-lock by construction) and the prior snap
-    # share over dressed weeks strictly before it, same definition as as_of().
-    roles = _roles(conn, "season = ? AND week = ?", (season, week))
-    pool = pool.merge(roles.drop(columns=["season", "week"]), on="player_id", how="left")
-    prior = _frame(
+    return attach_roles(conn, pool, season, week)[ROSTER_SLATE_COLUMNS]
+
+
+def week_roles(conn: sqlite3.Connection, season: int, week: int) -> pd.DataFrame:
+    """depth_rank and injury_status for week W itself — pre-lock by construction."""
+    return _roles(conn, "season = ? AND week = ?", (season, week)).drop(columns=["season", "week"])
+
+
+def prior_snap_share(conn: sqlite3.Connection, season: int, week: int) -> pd.DataFrame:
+    """Mean snap share over dressed weeks strictly before W, zeros counted —
+    the same definition as as_of() uses, so ties break the same way."""
+    return _frame(
         conn,
-        f"""
+        """
         SELECT r.player_id, AVG(COALESCE(s.snap_pct, 0)) AS prior_snap
         FROM rosters r
         JOIN games g ON g.season = r.season AND g.week = r.week
@@ -251,11 +260,22 @@ def roster_slate(conn: sqlite3.Connection, season: int, week: int) -> pd.DataFra
         """,
         (season, season, week),
     )
-    pool = pool.merge(prior, on="player_id", how="left")
-    pool["season"] = season
-    pool["week"] = week
-    pool["eff_rank"] = effective_ranks(pool)
-    return pool[ROSTER_SLATE_COLUMNS]
+
+
+def attach_roles(conn: sqlite3.Connection, pool: pd.DataFrame, season: int, week: int) -> pd.DataFrame:
+    """Add depth_rank, injury_status and eff_rank to a week-W pool frame.
+
+    ``pool`` needs player_id, team, position. eff_rank is the ordinal among the
+    rows of ``pool`` sharing (team, position) — so the pool must be the set of
+    players actually available (dressed for a backtest, not-OUT for a live
+    DK export), which is what makes "rank among the available" meaningful.
+    """
+    out = pool.merge(week_roles(conn, season, week), on="player_id", how="left")
+    out = out.merge(prior_snap_share(conn, season, week), on="player_id", how="left")
+    out["season"] = season
+    out["week"] = week
+    out["eff_rank"] = effective_ranks(out) if len(out) else pd.Series(dtype=int)
+    return out.drop(columns=["season", "week", "prior_snap"])
 
 
 def actuals(conn: sqlite3.Connection, season: int, week: int) -> pd.DataFrame:
