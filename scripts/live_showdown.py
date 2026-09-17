@@ -56,10 +56,11 @@ from src.ingest import nfl_stats  # noqa: E402
 from src.ingest.dk_salaries import parse_dk_export, parse_slate_filename  # noqa: E402
 
 SALARY_FLOOR = 1200      # T17: excludes the DK "will not play" pricing tier
-# T15: calibrated against the 2026-w01 NE@SEA standings and checked on SF@LAR
-# (docs/data-sources.md, "The chalk cluster").
-CHALK_SHARE = 0.20
-CHALK_JITTER = 0.15
+# T15: fitted on the 2026-w01 NE@SEA standings (63.5% distinct / 0.97% top
+# build vs real 61.5% / 1.10%) and checked untouched on SF@LAR (73.5% / 0.63%
+# vs real 68.7% / 1.06%). See docs/data-sources.md, "The chalk cluster".
+CHALK_SHARE = 0.30
+CHALK_JITTER = 0.30
 
 
 def refresh_history(season: int) -> None:

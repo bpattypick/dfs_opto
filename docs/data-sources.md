@@ -1284,3 +1284,79 @@ being an `avg_points` row on the board. The `salaries` table can carry a
 live slate, which T3 (standings → ownership by player_id) and the December
 ownership model both need.
 
+## The chalk cluster (T15): the field is diverse and clustered at once, and now the sampler is too
+
+Two real standings files said the same thing: a Showdown field is 61–69%
+distinct lineups *and* has a most-entered build at ~1.1%, and a marginal
+sampler cannot produce both (the jitter that matches diversity understates
+the top build ~6×). Real entrants do not draw players independently; a
+share of them run an optimizer on roughly the same projections and land on
+the same few builds. `generate_field` now takes that literally: a
+**cluster** — the optimizer's near-optimal builds at low jitter, weighted
+by how often it lands on them (`field.chalk_builds`) — and a **share** of
+the field drawn from it, with the rest sampled diffusely against the
+*residual* ownership and the cluster lineups frozen through the repair
+pass. `src/standings.py` reads a standings CSV as lineups so the
+calibration has ground truth; T3 owns persistence.
+
+**Fitted on NE@SEA (2,369 entries mapped of 2,373; the four dropped
+rostered OUT players).** Generator fed the *real* ownership, to isolate the
+joint-structure question:
+
+| cluster jitter | share | distinct | top build | top-5 | own MAE |
+|----------------|-------|----------|-----------|-------|---------|
+| —              | 0     | 87.0%    | 0.25%     | 0.9%  | 0.7     |
+| 0.15           | 0.2   | 67.0%    | 2.32%     | 8.9%  | 0.4     |
+| 0.30           | 0.2   | 74.8%    | 0.76%     | 2.7%  | 0.7     |
+| **0.30**       | **0.3** | **63.5%** | **0.97%** | **4.0%** | 0.5 |
+| 0.30           | 0.4   | 54.4%    | 1.39%     | 5.2%  | 0.8     |
+| *real*         |       | *61.5%*  | *1.10%*   | *3.4%* |        |
+
+Two things worth stating. First, with **correct marginals and no cluster**
+the sampler is at 87% distinct against a real 61.5%: the joint structure is
+the whole story, not a residual. Second, the cluster's own concentration
+matters as much as the share — at jitter 0.15 the top build is 12% of the
+cluster and a 20% share already overshoots the real 1.1% twice over; at
+0.30 it is 4% and the share does the work. Ownership error does not move
+with the cluster (0.4–0.8 points either way), so the marginals are not
+being paid for. Fed the *estimated* ownership instead (the live path), the
+same setting reads 62.4% / 1.14% / 4.5% with the estimate's own 5.1-point
+MAE, unchanged.
+
+**Checked on SF@LAR, untouched (2,369 entries, real 68.7% / 1.06% / 4.2%):**
+
+| setting                | ownership in | distinct | top build | top-5 |
+|------------------------|--------------|----------|-----------|-------|
+| no cluster             | real         | 88.7%    | 0.25%     | 1.1%  |
+| jitter 0.30, share 0.3 | real         | **73.5%** | **0.63%** | 2.1% |
+| jitter 0.30, share 0.3 | estimated    | 72.9%    | 0.72%     | 2.3%  |
+
+The structure transfers — the cluster closes most of the distance on both
+axes — but the top build lands at 0.63% against 1.06%. The reason is
+visible in the table: on SF@LAR our optimizer's landscape at jitter 0.30
+was flatter (the most common build was 1% of the cluster, not 4%), so the
+same share produces less concentration, while the real field concentrated
+just as hard as it had the week before. Real entrants' consensus is
+sharper than our projections' optimizer says it should be on that slate. A
+share of ~0.45 or a jitter of ~0.2 would have matched SF@LAR, and would
+have overshot NE@SEA; one number cannot be fitted to both without fitting
+to the check, so the NE@SEA fit ships (`CHALK_SHARE = 0.30`,
+`CHALK_JITTER = 0.30`) and the SF@LAR gap is the stated error bar: the
+sampler now carries about **60–90% of the real top-build concentration**
+where it carried 25% before, and is within 2–5 points on distinct share
+where it was 25 points off. **Every duplication figure and every
+dup-adjusted ROI is anchored to a real field for the first time**, with
+that error bar attached.
+
+**Limits, stated.** (a) Two slates of ground truth; the third (DEN@KC) was
+lost to H2. Re-check the share on each new standings file — the live
+script prints the generated field's shape next to the real reference
+numbers on every run so drift is visible. (b) The cluster is built from
+*our* projections; the real field's cluster is built from the field's.
+Where those differ (SF@LAR), so does the concentration. A cluster built
+from a projection *consensus* — vendor or market — would fix that, and is
+one more reason H4/H8 matter. (c) Field size is the real contest's; a
+5,000-entry default field with a 2,369-entry calibration is an
+extrapolation the shape metrics do not depend on strongly (shares, not
+counts), but the most-entered *count* does.
+
