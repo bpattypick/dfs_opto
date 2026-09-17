@@ -23,6 +23,9 @@ Everything below is genuinely first-run-on-real-data:
   - the correlated score model has never driven a lineup before (only
     validated against historical stack covariance)
   - the field/duplication numbers still carry T15's ~6x understatement
+  - T19: candidates now include one lineup per plausible captain chosen on
+    floor/ceiling, the shortlist and the final ordering follow --objective
+    (cash: 25th percentile / cash rate; gpp: 90th percentile / top-1% rate)
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src import config as config_mod  # noqa: E402
 from src import db  # noqa: E402
+from src.captain import OBJECTIVES, captain_board, captain_candidates, rank_lineups  # noqa: E402
 from src.duplication import compare_duplication, most_duplicated  # noqa: E402
 from src.contest import PayoutTable  # noqa: E402
 from src.field import generate_field  # noqa: E402
@@ -125,6 +129,29 @@ def build_pool(export_path: str, season: int, week: int) -> pd.DataFrame:
     return floored
 
 
+# A synthetic, clearly-labelled payout table -- ranking tool only. Shaped for
+# a 5,000-entry field (12% paid, top-heavy); the tier boundaries scale with
+# the field so a smaller test field does not pay every entry.
+_SYNTHETIC_TIERS = [
+    (1, 1, 2000.0), (2, 2, 1000.0), (3, 3, 600.0), (4, 5, 300.0), (6, 10, 150.0),
+    (11, 25, 60.0), (26, 60, 25.0), (61, 150, 12.0), (151, 350, 8.0), (351, 600, 5.0),
+]
+_SYNTHETIC_FIELD = 5000
+
+
+def synthetic_payouts(field_size: int) -> PayoutTable:
+    scale = field_size / _SYNTHETIC_FIELD
+    tiers, last_hi = [], 0
+    for lo, hi, prize in _SYNTHETIC_TIERS:
+        lo_s = max(last_hi + 1, int(round(lo * scale)))
+        hi_s = max(lo_s, int(round(hi * scale)))
+        if lo_s > field_size:
+            break
+        tiers.append((lo_s, min(hi_s, field_size), prize))
+        last_hi = min(hi_s, field_size)
+    return PayoutTable.from_tiers(tiers)
+
+
 def candidate_builds(pool: pd.DataFrame, runs: int, jitter: float, seed: int):
     rng = np.random.default_rng(seed)
     base = pool["projection"].to_numpy(dtype=float)
@@ -153,6 +180,11 @@ def main(argv=None) -> int:
     p.add_argument("--top", type=int, default=8)
     p.add_argument("--compare-pool", type=int, default=40,
                    help="candidates (by raw projection) to run full ROI comparison on")
+    p.add_argument("--objective", choices=sorted(OBJECTIVES), default="cash",
+                   help="T19: 'cash' chooses on the lineup's 25th percentile and cash rate, "
+                        "'gpp' on its 90th percentile and top-1%% rate (R5: cash by default)")
+    p.add_argument("--captains", type=int, default=10,
+                   help="T19: candidate captains by floor/ceiling, each with its exact best complement")
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args(argv)
 
@@ -176,6 +208,24 @@ def main(argv=None) -> int:
                            size=args.field_size, seed=args.seed + 1)
     distinct = len(set(l.key() for l in field))
     print(f"{args.runs} optimizer runs -> {len(builds)} distinct candidates")
+
+    # T19: one candidate per plausible captain, chosen on floor/ceiling rather
+    # than mean, each with its exact best complement -- so the contest sim
+    # below is comparing captains, not re-ranking one captain's variants.
+    scores = CorrelatedScores(pool[["player_id", "position", "team", "projection"]])
+    quantile_col = OBJECTIVES[args.objective][0]
+    board = captain_board(pool, scores.players, scores, objective=args.objective,
+                          n_captains=args.captains, trials=args.trials, seed=args.seed)
+    print(f"\ncaptain board ({args.objective}: ordered by lineup {quantile_col}; "
+          f"each row is the best lineup around that captain)")
+    print(f"     {'captain':<22}{'pos':<4}{'proj':>6}{'sd':>6}{'p10':>6}{'p90':>6}  |"
+          f"{'lineup mean':>12}{'p10':>7}{'p25':>7}{'p50':>7}{'p90':>7}")
+    for _, r in board.iterrows():
+        print(f"     {name[r['captain']]:<22}{r['cpt_position']:<4}{r['cpt_projection']:>6.1f}"
+              f"{r['cpt_sd']:>6.1f}{r['cpt_p10']:>6.1f}{r['cpt_p90']:>6.1f}  |"
+              f"{r['mean']:>12.1f}{r['p10']:>7.1f}{r['p25']:>7.1f}{r['p50']:>7.1f}{r['p90']:>7.1f}")
+    for lu in board["lineup"]:
+        builds[lu] += 0          # union: every captain candidate is on the board
     print(f"field of {args.field_size}: {distinct} distinct "
           f"({distinct/args.field_size:.1%}), most-entered "
           f"{most_duplicated(field, top=1).iloc[0]['dup_rate']*100:.2f}%\n")
@@ -185,17 +235,16 @@ def main(argv=None) -> int:
     # wasted work: only the highest-projected ones are ever going to rank near
     # the top on dup-adjusted ROI either. --compare-pool trims to a shortlist
     # first, by raw projection, then compares just that shortlist properly.
-    pts = dict(zip(pool.player_id, pool.projection))
-    ranked = sorted(builds, key=lambda l: lineup_points(l, pts), reverse=True)
+    # Shortlist by the objective's lineup quantile (T19), not by mean, so a
+    # steadier or higher-ceiling captain is not cut before the sim sees it.
+    all_builds = list(builds)
+    lq = rank_lineups(all_builds, scores.players, scores, trials=args.trials, seed=args.seed).table
+    lq = lq.set_index(lq["lineup"].map(lambda l: l.key()))
+    ranked = sorted(all_builds, key=lambda l: lq.loc[[l.key()], quantile_col].iloc[0], reverse=True)
     candidates = ranked[:args.compare_pool]
-    print(f"comparing the top {len(candidates)} of {len(builds)} distinct candidates "
-          f"by projection (--compare-pool to widen)\n")
-    scores = CorrelatedScores(pool[["player_id", "position", "team", "projection"]])
-    # A synthetic, clearly-labelled payout table — ranking tool only.
-    payouts = PayoutTable.from_tiers([
-        (1, 1, 2000.0), (2, 2, 1000.0), (3, 3, 600.0), (4, 5, 300.0), (6, 10, 150.0),
-        (11, 25, 60.0), (26, 60, 25.0), (61, 150, 12.0), (151, 350, 8.0), (351, 600, 5.0),
-    ])
+    print(f"\ncomparing the top {len(candidates)} of {len(builds)} distinct candidates "
+          f"by lineup {quantile_col} (--compare-pool to widen)\n")
+    payouts = synthetic_payouts(args.field_size)
     fee = payouts.total_prizes / (args.field_size * (1 - 0.10))  # ~10% synthetic rake
 
     table = compare_duplication(
@@ -204,18 +253,23 @@ def main(argv=None) -> int:
         labels=[f"c{i}" for i in range(len(candidates))],
     )
 
+    rate_col = OBJECTIVES[args.objective][1]
+    table = table.sort_values([rate_col, "dup_roi"], ascending=False).reset_index(drop=True)
     print(f"SYNTHETIC contest: {args.field_size:,} entries, ~${fee:.2f} fee — "
-          f"ranking only, not a real payout table\n")
-    print(f"{'rank':<5}{'proj':>7}{'dup%':>7}{'dupROI':>9}{'rawROI':>9}"
+          f"ranking only, not a real payout table; ordered by {rate_col} then dupROI "
+          f"(--objective {args.objective})\n")
+    print(f"{'rank':<5}{'proj':>7}{'p10':>6}{'p90':>6}{'dup%':>7}{'dupROI':>9}{'rawROI':>9}"
           f"{'cash%':>7}{'top1%':>7}{'win%':>7}{'solo%':>7}  lineup")
-    print("-" * 118)
+    print("-" * 130)
     for i, row in table.head(args.top).iterrows():
         lu = row["lineup"]
         proj = lineup_points(lu, dict(zip(pool.player_id, pool.projection)))
+        q = lq.loc[[lu.key()]].iloc[0]
         flags = " ".join(f"[{src[p]}]" for p in lu.players if src[p] != "v4")
-        print(f"{i+1:<5}{proj:>7.1f}{row['dup_rate']*100:>6.2f}%{row['dup_roi']:>+9.1%}"
-              f"{row['raw_roi']:>+9.1%}{row['cash_rate']*100:>6.1f}%{row['top1_rate']*100:>6.1f}%"
-              f"{row['win_rate']*100:>6.1f}%{row['solo_win_rate']*100:>6.2f}%  CPT {name[lu.captain]}")
+        print(f"{i+1:<5}{proj:>7.1f}{q['p10']:>6.1f}{q['p90']:>6.1f}{row['dup_rate']*100:>6.2f}%"
+              f"{row['dup_roi']:>+9.1%}{row['raw_roi']:>+9.1%}{row['cash_rate']*100:>6.1f}%"
+              f"{row['top1_rate']*100:>6.1f}%{row['win_rate']*100:>6.1f}%{row['solo_win_rate']*100:>6.2f}%"
+              f"  CPT {name[lu.captain]}")
         print(f"      {' / '.join(name[x] for x in lu.flex)}"
               + (f"   {flags}" if flags else ""))
     print("\n[avg_points] = AvgPointsPerGame, not v4 (unresolved to history, or a kicker).")

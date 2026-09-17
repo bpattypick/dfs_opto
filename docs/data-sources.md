@@ -1080,3 +1080,81 @@ committed-override mechanism remains the late fix. (d) The depth chart is
 the team's published one; teams are sometimes slow to update it, which the
 dressed-only ranking mitigates but cannot remove.
 
+## Captain by floor and ceiling (T19): built, and the floor is honest about itself
+
+Twice live the optimizer captained the highest mean per dollar and lost on
+it (Stafford SF@LAR, Dobbins DEN@KC). The mechanism was upstream of the
+contest sim: candidates came from a mean-maximising optimizer, so every
+candidate captained the same player and the sim never got to *compare
+captains*. `src/captain.py` fixes the generation step with what already
+existed — the score model's per-position variance (T13) and the correlated
+simulator — and adds no new parameters:
+
+1. `player_quantiles`: each player's floor / median / ceiling, closed-form
+   from the lognormal the simulator draws from.
+2. `captain_candidates`: one lineup per plausible captain (top by the
+   objective's quantile, union top by mean so the old answer is always on
+   the board), each with the **exact** best five-FLEX complement under the
+   cap and both-teams rule (brute force over the top 30 by projection plus
+   the cheapest five; verified against exhaustive search in tests).
+3. `rank_lineups`: lineup-level mean and quantiles from one correlated draw,
+   captain at 1.5×, every lineup on the same draws. `--objective cash`
+   shortlists and orders on the lineup's 25th percentile and cash rate,
+   `gpp` on the 90th and top-1% rate. Cash is the default (R5).
+
+The lineup-level number is the point: with Mahomes as captain and his own
+pass-catchers in the FLEX, the lineup is *wider* than the same FLEX behind
+Dobbins, whatever the two marginals say alone (+0.33 QB–top target,
++0.21 QB–WR). A test pins that. The board on the DEN@KC slate, v4
+projections, cash objective:
+
+| captain   | pos | proj | sd  | own p10 | own p90 | lineup mean | p10  | p25  | p90   |
+|-----------|-----|------|-----|---------|---------|-------------|------|------|-------|
+| Mahomes   | QB  | 21.5 | 8.7 | 12.1    | 32.8    | 99.0        | 69.4 | 80.6 | 133.2 |
+| Dobbins   | RB  | 12.7 | 7.9 | **5.2** | 22.4    | 95.9        | 67.5 | 79.1 | 128.7 |
+| Nix       | QB  | 18.9 | 8.6 | 9.9     | 30.0    | 95.6        | 68.6 | 78.8 | 125.6 |
+| Rice      | WR  | 17.1 | 9.8 | 7.5     | 29.4    | 96.3        | 66.9 | 78.0 | 128.1 |
+
+Dobbins' own tenth percentile is 5.2 — the 3.6 he returned was inside the
+model's range, not a surprise — and the board says so before lock instead
+of after.
+
+**Are the floors and ceilings real? Measured, roster pool 2020–2025, v4
+means, the projected top-12 per game (n = 19,380):** share of actuals at or
+below each model quantile, ideal = the quantile.
+
+| position | ≤p10  | ≤p25  | ≤p50  | ≤p75  | ≤p90  | ≤p95  |
+|----------|-------|-------|-------|-------|-------|-------|
+| QB       | 0.184 | 0.283 | 0.469 | 0.716 | 0.903 | 0.968 |
+| RB       | 0.213 | 0.330 | 0.516 | 0.726 | 0.883 | 0.952 |
+| WR       | 0.236 | 0.347 | 0.530 | 0.728 | 0.879 | 0.947 |
+| TE       | 0.208 | 0.313 | 0.474 | 0.711 | 0.883 | 0.948 |
+| DST      | 0.203 | 0.320 | 0.499 | 0.715 | 0.893 | 0.953 |
+| **ALL**  | **0.216** | **0.326** | 0.507 | 0.722 | 0.886 | 0.952 |
+
+The median and the ceiling are calibrated (p50 → 0.507, p90 → 0.886, p95 →
+0.952). **The floor is optimistic**: a fifth of top-12 actuals land below the
+model's tenth percentile and a third below its 25th. A lognormal has no mass
+at zero and its left tail is thin; the real one has both (3–7.5% of top-12
+players score exactly 0; blowouts and in-game injuries do the rest). WR
+floors are the most overstated, QB floors the least — so a true-floor
+correction would push the cash choice *further* toward the steady captain,
+not away from it. The ordering the board gives is directionally right; the
+floor *numbers* should be read as "about ten percentile points too kind."
+Fixing that is a score-model change (zero mass and a fatter left tail per
+position) and is queued as T24 rather than folded in here.
+
+**Ceiling as a captain predictor, measured on the same slice:** the game's
+actual top scorer is the projected #1 by mean 23.9% of the time, by model
+p90 **26.3%**, by p95 25.7%, by p10 22.6% (top-3: 53.5 / 53.9 / 54.1 /
+52.7%). Ordering the captain slot on ceiling is a real if modest gain for
+GPP, and ordering it on floor is worse for that question — which is the
+whole reason the objective is a switch and not a constant.
+
+**Also fixed on the way:** the live script's synthetic payout table paid 600
+places regardless of field size, so any test field under 600 entries cashed
+every lineup and the cash ordering was degenerate; the tiers now scale with
+the field. The shortlist handed to the contest sim is now the top candidates
+by the objective's lineup quantile, not by mean, so a steadier or
+higher-ceiling captain is not cut before the sim sees it.
+
