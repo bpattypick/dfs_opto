@@ -697,6 +697,111 @@ ruled out. Worth remembering when presenting a "best value" pick going
 forward: cheap and high point-per-dollar also means high variance, and that
 should be said in the same breath as the recommendation, not after the fact.
 
+## Where the projection's error actually lives (measured, held-out 2024–2025)
+
+Asked after DEN@KC: what is the projection model missing? Three experiments,
+all on `player_week_stats` 2020–2025 (QB/RB/WR/TE), ridge regression fit per
+position on 2020–2023, evaluated on 2024–2025 (11,232 player-weeks), players
+with ≥3 prior games. Every feature is computed from rows strictly before the
+row's `(season, week)`, same rule as the harness. Scripts were one-off
+(scratchpad); the numbers are reproducible from the DB.
+
+**1. What the trailing history can still add — about 4%.**
+
+| features (on top of trailing-17 mean)             | MAE  | Spearman | top-12-in-game ρ |
+|---------------------------------------------------|------|----------|------------------|
+| trailing-17 `dk_points` only (= v3's input)        | 4.83 | 0.663    | 0.488            |
+| + recency (trailing-3, EWM half-life 4)            | 4.74 | 0.680    | 0.499            |
+| + trailing-17 usage (targets, carries, snaps, …)   | 4.82 | 0.665    | 0.484            |
+| + usage trailing-3 + last-week snap%               | 4.66 | 0.695    | 0.510            |
+| + TD / non-TD split                                | 4.82 | 0.665    | 0.491            |
+| + Vegas (implied total, spread, total)             | 4.83 | 0.660    | 0.489            |
+| everything above                                   | 4.63 | 0.699    | 0.520            |
+
+Recency and *recent* usage are the only parts that matter; long-window usage
+is redundant with long-window points. Vegas at the player level adds nothing —
+that is the third time it has been measured (v1 multiplier, ablation, here),
+so stop treating it as a projection lever; it stays useful for correlations,
+DST and game environment only. This is the "v4 features" work and it is
+real, but it is a 4% improvement, not the missing piece.
+
+**2. What *role knowledge* is worth — 2.5× that.** A deliberate cheat:
+add this week's actual snap% as a feature, as an upper bound on what depth
+charts, injury reports and beat-writer role news could supply.
+
+| model                                  | MAE  | Spearman | top-12 ρ |
+|----------------------------------------|------|----------|----------|
+| trailing-17 only                       | 4.83 | 0.663    | 0.488    |
+| all history features                   | 4.63 | 0.699    | 0.520    |
+| trailing-17 **+ this-week snap%**      | 4.32 | 0.766    | 0.548    |
+| all history **+ this-week snap%**      | 4.20 | 0.779    | 0.565    |
+
+Knowing the role alone is worth −0.51 MAE and +0.10 Spearman — more than
+every history feature combined, and it stacks with them. Among the twelve
+highest-projected players per game, **18% played under 80% of their previous
+week's snaps**, and the ones under 50% were projected **+7.0 points too high**
+on average. That bucket is Price (0 → started), Fields (starter history →
+third string), Dobbins (feature back → 8 carries, 0 targets in a blowout).
+The pipeline currently has *no data source at all* for it: no depth charts,
+no injury reports, no snap trend, and no current-season stats.
+
+**3. The live pool is 40% invisible to the model.** Re-running
+`project_live_pool` on the three archived 2026 exports:
+
+| slate   | pool | unresolved | team_changed | avg_points fallback | v3 | top-14 by salary on v3 |
+|---------|------|------------|--------------|---------------------|----|------------------------|
+| NE@SEA  | 46   | 13         | 9            | 14                  | 23 | 8 of 14                |
+| SF@LAR  | 49   | 18         | 5            | 19                  | 25 | 8 of 14                |
+| DEN@KC  | 51   | 17         | 7            | 18                  | 26 | 9 of 14                |
+
+Only 8–9 of the fourteen players who decide a Showdown slate got a model
+number; the rest were DK's own `AvgPointsPerGame` (which carries every
+weakness above plus a week-1 zero for anyone new) or a refusal. Two causes,
+both mechanical: **2026 is not ingested** (`config.yaml` seasons end at 2025,
+so "trailing" means "last year, possibly on another team"), and the crosswalk
+cannot resolve a forward-looking slate (T14). Neither is a modelling problem.
+
+**4. The noise floor, so expectations are honest.** For projected-top-12
+players whose role did *not* change (80–120% of last week's snaps, n=3,915),
+MAE is still 6.2 and the sd of actual is 9.0. Within the 15–20 projection
+band the sd of actual is 9.3; in 20–30 it is 10.3. That is the irreducible
+part: a single Showdown lineup is six draws from distributions that wide, and
+three live results are three draws. The game's actual top scorer is the
+projected #1 only **23%** of the time, in the projected top-3 54%, top-5
+72% — and the snap oracle barely moves that (26 / 58 / 78%). The captain
+slot cannot be won on mean projection; it is a ceiling-and-ownership
+decision (T19), and the sim already has the variance to make it.
+
+**5. The backtest cannot see the failure mode that lost live.**
+`player_week_stats` holds ~11 offensive players per team-game — only those
+who recorded a stat. A DK Showdown pool has ~25 per team. So the harness
+never asks "does this player play at all?", which is exactly the question
+Price, Fields and Franklin turned on. Backtest MAE ≈ 4.8–5.0 therefore
+understates live error by construction; a harness that scores the full
+roster (nflverse weekly rosters as the pool, 0 points for anyone absent
+from the stat line) is needed before an availability model can be
+validated without leaking.
+
+**What this changes.** The ranked list, by measured size: (1) ingest the
+current season and fix pool resolution — no model can beat data it isn't
+given; (2) an availability/role layer from free nflverse depth charts,
+injury reports and snap counts, gated so a listed backup projects near
+zero and a listed starter with no history gets a role-based prior instead
+of 0.0; (3) score the backtest on the full roster so (2) can be validated;
+(4) captain by ceiling (T19); (5) recent-usage and recency features (v4)
+for the last 4%. Player props (H8) are the market's *already-role-aware*
+estimate and would cover (2) for the top of the board in one step — the
+measurement above raises H8's priority rather than lowering it.
+
+**Source check for (2), from this sandbox.** `nfl_data_py.import_depth_charts`
+loads (2025: 554k rows) and is keyed by a `dt` timestamp, not a week — each
+row is a dated snapshot with `gsis_id`, `pos_abb`, `pos_rank`, which is the
+right shape for a no-look-ahead join (take the last snapshot before kickoff).
+`import_injuries` loads (2025: 6,068 rows) with `season, week, team, gsis_id,
+report_status, practice_status`. `import_weekly_rosters` returned **HTTP 403**
+here — check it against the stale-URL workaround at the top of this doc before
+assuming it is unavailable. Snap counts are already in `player_week_stats`.
+
 **A rounding bug of my own, caught while logging this.** The live report
 showed this lineup at "0.00%" duplicated — the actual figure was 0.0600%
 (3 of 5,000 in the simulated field), which rounds to "0.00%" at the table's
