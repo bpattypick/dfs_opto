@@ -71,6 +71,33 @@ def raw_snaps(season: int) -> pd.DataFrame:
     ])
 
 
+def raw_rosters(season: int) -> pd.DataFrame:
+    weeks = [1, 2] if season == 2026 else [17, 18]   # the upcoming week is published early
+    rows = []
+    for w in weeks:
+        rows += [
+            {"season": season, "week": w, "game_type": "REG", "team": "SEA", "position": "QB",
+             "status": "ACT", "gsis_id": "00-qb", "full_name": "Sam Darnold",
+             "depth_chart_position": "QB"},
+            {"season": season, "week": w, "game_type": "REG", "team": "SEA", "position": "WR",
+             "status": "ACT", "gsis_id": "00-wr", "full_name": "Jaxon Smith-Njigba",
+             "depth_chart_position": "WR"},
+            {"season": season, "week": w, "game_type": "REG", "team": "LA", "position": "FB",
+             "status": "INA", "gsis_id": "00-fb", "full_name": "Some Fullback",
+             "depth_chart_position": "RB"},
+            {"season": season, "week": w, "game_type": "REG", "team": "SEA", "position": "OL",
+             "status": "ACT", "gsis_id": "00-ol", "full_name": "A Lineman",
+             "depth_chart_position": "T"},
+            {"season": season, "week": w, "game_type": "REG", "team": "SEA", "position": "TE",
+             "status": "DEV", "gsis_id": None, "full_name": "No Id Yet",
+             "depth_chart_position": None},
+        ]
+    rows.append({"season": season, "week": 19, "game_type": "WC", "team": "SEA", "position": "QB",
+                 "status": "ACT", "gsis_id": "00-qb", "full_name": "Sam Darnold",
+                 "depth_chart_position": "QB"})
+    return pd.DataFrame(rows)
+
+
 @pytest.fixture
 def conn():
     conn = db.connect(":memory:")
@@ -88,6 +115,8 @@ def sources(monkeypatch):
                         lambda season, refresh=False, cfg=None, today=None: raw_team(season))
     monkeypatch.setattr(nflverse, "snap_counts",
                         lambda season, refresh=False, cfg=None, today=None: raw_snaps(season))
+    monkeypatch.setattr(nflverse, "weekly_rosters",
+                        lambda season, refresh=False, cfg=None, today=None: raw_rosters(season))
 
 
 def stats(conn) -> pd.DataFrame:
@@ -139,6 +168,42 @@ class TestIngest:
         assert offense[offense.season == SEASON].snaps.isna().all()
 
 
+class TestRosters:
+    def rosters(self, conn) -> pd.DataFrame:
+        return pd.read_sql_query("SELECT * FROM rosters ORDER BY season, week, player_id", conn)
+
+    def test_skill_positions_regular_season_with_an_id_only(self, conn, sources):
+        nfl_stats.ingest(conn, [SEASON])
+        frame = self.rosters(conn)
+        assert set(frame.player_id) == {"00-qb", "00-wr", "00-fb"}   # no OL, no id-less TE
+        assert set(frame.week) == {1, 2}                             # no wild-card row
+        assert set(frame.status) == {"ACT", "INA"}                   # every status kept
+
+    def test_team_and_position_are_normalized(self, conn, sources):
+        nfl_stats.ingest(conn, [SEASON])
+        fb = self.rosters(conn).set_index("player_id").loc["00-fb"].iloc[0]
+        assert fb["team"] == "LAR"
+        assert fb["position"] == "RB"
+        assert fb["depth_position"] == "RB"
+
+    def test_rerun_is_idempotent(self, conn, sources):
+        nfl_stats.ingest(conn, [SEASON])
+        n = len(self.rosters(conn))
+        nfl_stats.ingest(conn, [SEASON])
+        assert len(self.rosters(conn)) == n == 6
+
+    def test_a_missing_roster_file_warns_and_everything_else_still_loads(self, conn, sources,
+                                                                          monkeypatch):
+        def missing(season, refresh=False, cfg=None, today=None):
+            raise nflverse.NflverseUnavailable("not published")
+
+        monkeypatch.setattr(nflverse, "weekly_rosters", missing)
+        counts = nfl_stats.ingest(conn, [SEASON])
+        assert counts["rosters"] == 0
+        assert counts["player_week_stats"] > 0
+        assert self.rosters(conn).empty
+
+
 class TestIngestStatus:
     def at(self, iso: str) -> datetime:
         return datetime.fromisoformat(iso).replace(tzinfo=timezone.utc)
@@ -150,6 +215,12 @@ class TestIngestStatus:
         assert status["last_completed_week"] == 1
         assert status["missing_weeks"] == []
         assert "!!" not in nfl_stats.format_status(status)
+
+    def test_reports_how_far_ahead_the_rosters_run(self, conn, sources):
+        nfl_stats.ingest(conn, [SEASON])
+        status = nfl_stats.ingest_status(conn, SEASON, now=self.at("2026-09-17T12:00:00"))
+        assert status["last_roster_week"] == 2
+        assert "rosters through week 2" in nfl_stats.format_status(status)
 
     def test_a_completed_but_unpublished_week_is_flagged(self, conn, sources):
         nfl_stats.ingest(conn, [SEASON])

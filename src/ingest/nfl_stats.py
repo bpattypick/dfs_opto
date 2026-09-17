@@ -248,6 +248,54 @@ def _attach_snaps(
     return merged.drop(columns=["_key_name", "_key_team", "offense_snaps", "offense_pct"])
 
 
+# --- rosters (T23) ------------------------------------------------------------
+
+# The dressed game-day roster. Every stat-recording player-week in 2024 carried
+# this status, so it is exactly the set of players who could have scored.
+ROSTER_STATUS_ACTIVE = "ACT"
+
+
+def _transform_rosters(raw: pd.DataFrame, season_types: list[str]) -> pd.DataFrame:
+    frame = raw[raw["game_type"].isin(season_types)].copy()
+    frame["position"] = frame["position"].map(normalize_position)
+    frame = frame[frame["position"].isin(FANTASY_POSITIONS)]
+    frame = frame.dropna(subset=["gsis_id"])
+
+    out = pd.DataFrame({
+        "player_id": frame["gsis_id"],
+        "season": frame["season"].astype(int),
+        "week": frame["week"].astype(int),
+        "team": frame["team"].map(teams_mod.normalize_team),
+        "position": frame["position"],
+        "status": frame["status"],
+        "depth_position": frame["depth_chart_position"]
+        if "depth_chart_position" in frame.columns else None,
+        "name": frame["full_name"],
+    })
+    # A player dresses for one team in a week. The 2024 feed has no duplicate
+    # (player, week) rows; if a mid-week trade ever produces one, keep the last
+    # so the primary key holds rather than failing the whole season.
+    out = out.drop_duplicates(subset=["player_id", "season", "week"], keep="last")
+    return out.dropna(subset=["team"])
+
+
+def load_rosters(conn, seasons: list[int], refresh: bool = False, cfg=None) -> int:
+    """Weekly roster status for ``seasons``. A missing season warns and is skipped."""
+    cfg = cfg or config_mod.load()
+    season_types = cfg.get("seasons.season_types", ["REG"])
+    frames = []
+    for season in seasons:
+        try:
+            raw = nflverse.weekly_rosters(season, refresh=refresh, cfg=cfg)
+        except nflverse.NflverseUnavailable as exc:
+            log.warning("skipping rosters for %s: %s", season, exc)
+            continue
+        frames.append(_transform_rosters(raw, season_types))
+    if not frames:
+        return 0
+    return db.upsert_df(conn, "rosters", pd.concat(frames, ignore_index=True))
+
+
 # --- players ------------------------------------------------------------------
 
 
@@ -303,6 +351,7 @@ def ingest(conn, seasons: list[int], refresh: bool = False, cfg=None) -> dict[st
         "player_week_stats": db.upsert_df(conn, "player_week_stats", stats),
         "dst_week_stats": db.upsert_df(conn, "dst_week_stats", dst) if len(dst) else 0,
         "players": db.upsert_df(conn, "players", _players_table(stats)),
+        "rosters": load_rosters(conn, seasons, refresh=refresh, cfg=cfg),
     }
     for table, n in counts.items():
         log.info("%s: %d rows", table, n)
@@ -345,20 +394,28 @@ def ingest_status(conn, season: int, now: datetime | None = None) -> dict:
             int(w) for w, k in last_kick.items() if pd.notna(k) and k + _GAME_LENGTH < now
         )
 
+    rosters = pd.read_sql_query(
+        "SELECT MAX(week) AS w FROM rosters WHERE season = ?", conn, params=(season,)
+    )
+    last_roster = rosters["w"].iloc[0]
+
     return {
         "season": season,
         "ingested_weeks": ingested,
         "last_ingested_week": max(ingested) if ingested else None,
         "last_completed_week": max(completed) if completed else None,
         "missing_weeks": [w for w in completed if w not in ingested],
+        "last_roster_week": int(last_roster) if pd.notna(last_roster) else None,
     }
 
 
 def format_status(status: dict) -> str:
     li = status["last_ingested_week"]
     lc = status["last_completed_week"]
+    lr = status.get("last_roster_week")
     line = (f"{status['season']}: ingested through week {li if li is not None else '-'}; "
-            f"completed through week {lc if lc is not None else '-'}")
+            f"completed through week {lc if lc is not None else '-'}; "
+            f"rosters through week {lr if lr is not None else '-'}")
     if status["missing_weeks"]:
         line += (f"\n!! completed week(s) {status['missing_weeks']} not yet published by "
                  "nflverse (usually by Tuesday) -- re-run before building a lineup")

@@ -56,6 +56,11 @@ TEAM_WEEK_URLS = (
 SNAP_COUNT_URLS = (
     _RELEASE + "/snap_counts/snap_counts_{season}.parquet",
 )
+# nfl_data_py.import_weekly_rosters returns HTTP 403 from a restricted network;
+# the release asset itself downloads fine.
+WEEKLY_ROSTER_URLS = (
+    _RELEASE + "/weekly_rosters/roster_weekly_{season}.parquet",
+)
 GAMES_URLS = (
     "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv",
     "http://www.habitatring.com/games.csv",
@@ -193,6 +198,19 @@ def snap_counts(season: int, refresh: bool = False, cfg=None, today: date | None
     """Per-player per-week snap counts for one season (PFR-sourced, keyed by name)."""
     urls = tuple(u.format(season=season) for u in SNAP_COUNT_URLS)
     path = _cached(urls, f"snap_counts_{season}.parquet", refresh, cfg,
+                   live=is_live_season(season, today), today=today)
+    return pd.read_parquet(path)
+
+
+def weekly_rosters(season: int, refresh: bool = False, cfg=None, today: date | None = None) -> pd.DataFrame:
+    """Per-player per-week roster status for one season — the backtest's pool source (T23).
+
+    Published ahead of each week (the 2026 file carried week 2 on the
+    Thursday of week 2), so the current week's dressed roster is knowable
+    pre-lock.
+    """
+    urls = tuple(u.format(season=season) for u in WEEKLY_ROSTER_URLS)
+    path = _cached(urls, f"roster_weekly_{season}.parquet", refresh, cfg,
                    live=is_live_season(season, today), today=today)
     return pd.read_parquet(path)
 

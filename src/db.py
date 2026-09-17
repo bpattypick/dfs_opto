@@ -150,6 +150,25 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     metrics_json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS rosters (
+    -- ADDITION (T23): who was on the game-day roster, in what status, from
+    -- nflverse weekly rosters. status 'ACT' is the dressed 46 -- every
+    -- stat-recording player-week in 2024 was ACT -- so it is the pool a
+    -- Showdown entrant faces at lock (inactives are announced 90 minutes
+    -- before kickoff). The backtest's roster pool is built from it; a player
+    -- here with no stat line that week scored 0. Skill positions only; DST
+    -- is synthetic. All statuses are kept because INA/RES/DEV are signals.
+    player_id      TEXT,
+    season         INTEGER,
+    week           INTEGER,
+    team           TEXT,
+    position       TEXT,
+    status         TEXT,              -- ACT/INA/RES/DEV/CUT/... as published
+    depth_position TEXT,              -- nflverse depth_chart_position
+    name           TEXT,
+    PRIMARY KEY (player_id, season, week)
+);
+
 CREATE TABLE IF NOT EXISTS entries (
     -- Experiment ledger, one row per contest entry (roadmap v2 Step 1). This
     -- is the measurement layer: without it, process improvements and variance
@@ -182,6 +201,7 @@ CREATE INDEX IF NOT EXISTS idx_salaries_slate   ON salaries (season, week);
 CREATE INDEX IF NOT EXISTS idx_proj_season_week ON projections (season, week);
 CREATE INDEX IF NOT EXISTS idx_xwalk_player     ON id_crosswalk (player_id);
 CREATE INDEX IF NOT EXISTS idx_entries_report   ON entries (contest_type, model_version);
+CREATE INDEX IF NOT EXISTS idx_rosters_week     ON rosters (season, week, team);
 """
 
 TABLES = (
@@ -190,6 +210,7 @@ TABLES = (
     "games",
     "player_week_stats",
     "dst_week_stats",
+    "rosters",
     "salaries",
     "projections",
     "odds_snapshots",

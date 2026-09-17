@@ -172,15 +172,20 @@ class TestDatasets:
         assert (archive / "stats_player_week_2026_2026-09-17.parquet").exists()
         assert not (archive / "stats_player_week_2026.parquet").exists()
 
-    def test_team_week_and_snap_counts_follow_the_same_rule(self, archive, remote):
+    def test_team_week_snap_counts_and_rosters_follow_the_same_rule(self, archive, remote):
         remote["content"] = parquet_bytes(pd.DataFrame({"season": [2026], "week": [1]}))
         nflverse.team_week(2026, today=TODAY)
         nflverse.snap_counts(2026, today=TODAY)
         nflverse.snap_counts(2019, today=TODAY)
+        nflverse.weekly_rosters(2026, today=TODAY)
+        nflverse.weekly_rosters(2019, today=TODAY)
         assert (archive / "stats_team_week_2026_2026-09-17.parquet").exists()
         assert (archive / "snap_counts_2026_2026-09-17.parquet").exists()
         assert (archive / "snap_counts_2019.parquet").exists()
+        assert (archive / "roster_weekly_2026_2026-09-17.parquet").exists()
+        assert (archive / "roster_weekly_2019.parquet").exists()
         assert nflverse.SNAP_COUNT_URLS[0].format(season=2026) in remote["calls"]
+        assert nflverse.WEEKLY_ROSTER_URLS[0].format(season=2019) in remote["calls"]
 
     def test_games_is_always_a_dated_snapshot(self, archive, remote):
         remote["content"] = b"game_id,season,week\n2026_01_NE_SEA,2026,1\n"

@@ -1,4 +1,4 @@
-"""python -m src.backtest --model shrunk_vegas --seasons 2020 2025"""
+"""python -m src.backtest --model shrunk_vegas --seasons 2020 2025 [--pool roster]"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from src import db
-from src.backtest import harness
+from src.backtest import harness, history
 from src.projection import MODELS
 
 
@@ -18,6 +18,9 @@ def main(argv=None) -> int:
                    default=(2020, 2025))
     p.add_argument("--weeks", nargs="*", type=int, help="restrict to these week numbers")
     p.add_argument("--min-games", type=int, default=3)
+    p.add_argument("--pool", choices=history.POOLS, default="played",
+                   help="'played': stat-recorders only (pre-T23 behaviour); "
+                        "'roster': everyone who dressed, 0 for no stat line")
     p.add_argument("--window", type=int, default=17)
     p.add_argument("--k", type=float, default=4.0, help="shrinkage strength (shrunk_vegas)")
     p.add_argument("--no-vegas", action="store_true")
@@ -37,7 +40,8 @@ def main(argv=None) -> int:
             model = cls(**kwargs)
             try:
                 result = harness.run(conn, model, seasons, min_games=args.min_games,
-                                     weeks=args.weeks, persist=not args.no_persist)
+                                     weeks=args.weeks, persist=not args.no_persist,
+                                     pool=args.pool)
             except harness.BacktestError as exc:
                 print(f"!! {exc}", file=sys.stderr)
                 return 1
