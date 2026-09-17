@@ -16,9 +16,24 @@ The generated field is only as good as the ownership estimates fed to it. Those
 come from `src/ownership.py` today (the optimal-rate baseline) and from the
 December LightGBM model later; calibration against real contest standings is
 what tells you which is closer to a real field.
+
+T15, the chalk cluster. Two real standings files showed a field is *diverse
+and clustered at once* -- 61-69% distinct lineups, yet a most-entered build
+at ~1.1% -- and no single jitter reproduces both: matching the marginals
+alone understates the top build about 6x. Real entrants are not drawing
+players independently; a share of them run an optimizer on roughly the same
+projections and land on the same few builds. ``generate_field`` therefore
+takes an optional cluster (``chalk_builds``: the optimizer's near-optimal
+lineups at low jitter, weighted by how often they came up) and a
+``chalk_share``: that share of the field is drawn from the cluster, the
+rest is sampled diffusely as before against the *residual* ownership, and
+the repair pass leaves the cluster lineups alone. The share is calibrated
+against real standings (docs/data-sources.md), not chosen.
 """
 
 from __future__ import annotations
+
+from collections import Counter
 
 import numpy as np
 import pandas as pd
@@ -96,6 +111,43 @@ def _sample(rng, candidates: np.ndarray, weights: np.ndarray, size: int) -> np.n
     return rng.choice(candidates, size=size, replace=False, p=weights / weights.sum())
 
 
+def chalk_builds(pool: pd.DataFrame, runs: int = 300, jitter: float = 0.15,
+                 seed: int | None = None) -> Counter:
+    """The cluster: near-optimal lineups and how often the optimizer lands on them.
+
+    ``pool`` needs ``projection`` (plus the optimizer's columns). Low jitter on
+    purpose -- this is what entrants running roughly the same projections
+    converge on, not the diffuse field. Returns ``Counter[Lineup]``.
+    """
+    from src.ownership import optimal_lineup   # local: ownership imports nothing from here
+
+    if "projection" not in pool.columns:
+        raise FieldError("chalk_builds needs a projection column")
+    if runs < 1 or jitter < 0:
+        raise FieldError("runs must be positive and jitter non-negative")
+    rng = np.random.default_rng(seed)
+    base = pool["projection"].to_numpy(dtype=float)
+    builds: Counter = Counter()
+    for _ in range(runs):
+        noise = rng.normal(1.0, jitter, len(base)) if jitter else np.ones(len(base))
+        captain, flex = optimal_lineup(pool, np.clip(base * noise, 0.0, None))
+        builds[Lineup(str(captain), tuple(sorted(str(p) for p in flex)))] += 1
+    return builds
+
+
+def _draw_cluster(rng, chalk: Counter, n: int, salary, team, cap) -> list[Lineup]:
+    """``n`` lineups from the cluster distribution, each checked DK-legal."""
+    if n == 0:
+        return []
+    lineups = list(chalk)
+    for lu in lineups:
+        if not showdown.is_legal(lu, salary, team, cap):
+            raise FieldError(f"chalk lineup is not legal for this pool: {lu}")
+    weights = np.array([chalk[lu] for lu in lineups], dtype=float)
+    picks = rng.choice(len(lineups), size=n, replace=True, p=weights / weights.sum())
+    return [lineups[i] for i in picks]
+
+
 def generate_field(
     pool: pd.DataFrame,
     ownership: pd.DataFrame,
@@ -103,11 +155,21 @@ def generate_field(
     seed: int | None = None,
     cap: int = showdown.SALARY_CAP,
     tolerance: float = 0.02,
+    chalk: Counter | None = None,
+    chalk_share: float = 0.0,
 ) -> list[Lineup]:
     """Sample ``size`` DK-legal opponent lineups matching the ownership input.
 
     Every returned lineup satisfies the cap, the 1 CPT + 5 FLEX shape and the
     both-teams rule.
+
+    ``chalk`` / ``chalk_share`` (T15): ``round(chalk_share * size)`` lineups
+    are drawn from the cluster, weighted by its counts, and the diffuse
+    sampler fills the rest against what the cluster left of each player's
+    target. The cluster lineups are never touched by the repair pass, so the
+    field's duplication structure is exactly what was asked for. A player the
+    cluster over-fills relative to his target simply gets no diffuse draws;
+    the residual shows up in ``realized_ownership``.
 
     ``tolerance`` is the repair pass's stopping target, not a guarantee: the
     pass swaps players until realized ownership is within it *or* no legal swap
@@ -119,6 +181,10 @@ def generate_field(
     pool, ownership = _validate(pool, ownership)
     if size < 1:
         raise FieldError(f"field size must be at least 1, got {size}")
+    if not 0.0 <= chalk_share <= 1.0:
+        raise FieldError(f"chalk_share must be in [0, 1], got {chalk_share}")
+    if chalk_share > 0 and not chalk:
+        raise FieldError("chalk_share > 0 needs a non-empty chalk cluster")
 
     rng = np.random.default_rng(seed)
     ids = pool["player_id"].to_numpy()
@@ -132,8 +198,18 @@ def generate_field(
     cpt_taken = np.zeros(len(ids))
     flex_taken = np.zeros(len(ids))
 
-    field: list[Lineup] = []
-    for _ in range(size):
+    n_chalk = int(round(chalk_share * size)) if chalk else 0
+    cluster = _draw_cluster(rng, chalk, n_chalk, salary, team, cap)
+    for lu in cluster:
+        if lu.captain not in index or any(p not in index for p in lu.flex):
+            raise FieldError(f"chalk lineup references a player outside the pool: {lu}")
+        cpt_taken[index[lu.captain]] += 1
+        for p in lu.flex:
+            flex_taken[index[p]] += 1
+    frozen = set(range(len(cluster)))
+
+    field: list[Lineup] = list(cluster)
+    for _ in range(size - n_chalk):
         lineup = None
         chase_until = int(MAX_DRAWS_PER_LINEUP * CHASE_SHARE)
         for attempt in range(MAX_DRAWS_PER_LINEUP):
@@ -168,12 +244,12 @@ def generate_field(
         field.append(lineup)
 
     return _repair_field(field, ids, cpt_target, flex_target, salary, team, cap,
-                         rng, tolerance)
+                         rng, tolerance, frozen=frozen)
 
 
 def _repair_field(
     field, ids, cpt_target, flex_target, salary, team, cap, rng, tolerance,
-    max_swaps=None,
+    max_swaps=None, frozen: set | None = None,
 ):
     """Swap players between lineups until realized ownership meets the target.
 
@@ -195,6 +271,7 @@ def _repair_field(
     if max_swaps is None:
         max_swaps = 100 * size
     index = {pid: i for i, pid in enumerate(ids)}
+    frozen = frozen or set()      # cluster lineups: counted, never swapped
 
     cpt_count = np.zeros(len(ids))
     flex_count = np.zeros(len(ids))
@@ -225,7 +302,7 @@ def _repair_field(
         """(over-target, under-target) players, worst first, that we can act on."""
         error = counts - targets
         over = [ids[i] for i in np.argsort(-error)
-                if error[i] > 0 and holders[ids[i]]]
+                if error[i] > 0 and (holders[ids[i]] - frozen)]
         under = [ids[i] for i in np.argsort(error) if error[i] < 0]
         return over, under
 
@@ -233,7 +310,7 @@ def _repair_field(
         over, under = ranked(flex_count, flex_target, holds_flex)
         for out_pid in over:
             for in_pid in under:
-                options = [i for i in holds_flex[out_pid]
+                options = [i for i in holds_flex[out_pid] - frozen
                            if in_pid not in field[i].players]
                 rng.shuffle(options)
                 for i in options:
@@ -251,7 +328,7 @@ def _repair_field(
         over, under = ranked(cpt_count, cpt_target, has_cpt)
         for out_pid in over:
             for in_pid in under:
-                options = list(has_cpt[out_pid])
+                options = list(has_cpt[out_pid] - frozen)
                 rng.shuffle(options)
                 for i in options:
                     lineup = field[i]
@@ -282,6 +359,28 @@ def _repair_field(
             break
 
     return field
+
+
+def field_shape(field) -> dict:
+    """The two numbers a real field is calibrated on: how diverse, how clustered.
+
+    ``distinct_share`` = distinct lineups / entries; ``top_build_share`` = the
+    most-entered lineup's share; ``top5_share`` = the five most-entered
+    lineups' combined share. Works on any sequence of ``Lineup`` (a generated
+    field or parsed standings).
+    """
+    field = list(field)
+    if not field:
+        raise FieldError("field is empty")
+    counts = Counter(lu.key() for lu in field)
+    ranked = sorted(counts.values(), reverse=True)
+    n = len(field)
+    return {
+        "entries": n,
+        "distinct_share": len(counts) / n,
+        "top_build_share": ranked[0] / n,
+        "top5_share": sum(ranked[:5]) / n,
+    }
 
 
 def realized_ownership(field: list[Lineup], pool: pd.DataFrame) -> pd.DataFrame:

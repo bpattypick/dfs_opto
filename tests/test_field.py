@@ -175,3 +175,76 @@ class TestShowdownRules:
         a = showdown.Lineup("x", ("a", "b", "c", "d", "e"))
         b = showdown.Lineup("x", ("e", "d", "c", "b", "a"))
         assert a.key() == b.key()
+
+
+class TestChalkCluster:
+    """T15: a share of the field converges on the same few builds."""
+
+    def two(self, entries, ownership):
+        # Two legal lineups from the plain sampler, used as the cluster.
+        return field_mod.generate_field(entries, ownership, size=2, seed=9)
+
+    def cluster(self, entries, ownership):
+        from collections import Counter
+        a, b = self.two(entries, ownership)
+        return Counter({a: 3, b: 1})
+
+    def test_the_cluster_share_is_present_and_untouched(self, pool, entries, ownership):
+        from src.field import field_shape
+        chalk = self.cluster(entries, ownership)
+        a = self.two(entries, ownership)[0]
+        field = field_mod.generate_field(pool, ownership, size=200, seed=1, chalk=chalk, chalk_share=0.25)
+        assert len(field) == 200
+        keys = [lu.key() for lu in field]
+        top = max(set(keys), key=keys.count)
+        assert top == a.key()
+        # 50 cluster lineups split ~3:1 -> the top build is ~19% of the field
+        assert 0.12 <= field_shape(field)["top_build_share"] <= 0.25
+
+    def test_no_cluster_reproduces_the_plain_sampler(self, pool, entries, ownership):
+        plain = field_mod.generate_field(pool, ownership, size=60, seed=3)
+        same = field_mod.generate_field(pool, ownership, size=60, seed=3, chalk=None, chalk_share=0.0)
+        assert [lu.key() for lu in plain] == [lu.key() for lu in same]
+
+    def test_every_lineup_is_still_legal_and_ownership_still_tracks(self, pool, entries, ownership):
+        chalk = self.cluster(entries, ownership)
+        field = field_mod.generate_field(pool, ownership, size=300, seed=2, chalk=chalk, chalk_share=0.2)
+        salary = dict(zip(pool.player_id, pool.salary)); team = dict(zip(pool.player_id, pool.team))
+        assert all(showdown.is_legal(lu, salary, team) for lu in field)
+        got = field_mod.realized_ownership(field, pool).set_index("player_id")
+        want = ownership.set_index("player_id")
+        err = (got.loc[want.index, "total_pct"] - want["cpt_pct"] - want["flex_pct"]).abs()
+        assert err.mean() < 0.08
+
+    def test_bad_share_or_empty_cluster_is_refused(self, pool, entries, ownership):
+        with pytest.raises(field_mod.FieldError, match="chalk_share"):
+            field_mod.generate_field(pool, ownership, size=10, chalk=self.cluster(entries, ownership), chalk_share=1.5)
+        with pytest.raises(field_mod.FieldError, match="non-empty"):
+            field_mod.generate_field(pool, ownership, size=10, chalk=None, chalk_share=0.3)
+
+    def test_an_illegal_chalk_lineup_is_refused(self, pool, entries, ownership):
+        from collections import Counter
+        a = self.two(entries, ownership)[0]
+        bad = showdown.Lineup(a.captain, a.flex[:4] + (a.captain,))
+        with pytest.raises(field_mod.FieldError, match="not legal"):
+            field_mod.generate_field(pool, ownership, size=10, chalk=Counter({bad: 1}), chalk_share=0.5)
+
+    def test_chalk_builds_come_from_the_optimizer_with_projections(self, pool):
+        from src.field import chalk_builds
+        rich = pool.copy()
+        rich["projection"] = [20.0 - i for i in range(len(rich))]
+        rich["name"] = rich["player_id"]; rich["position"] = "WR"
+        builds = chalk_builds(rich, runs=20, jitter=0.0, seed=0)
+        assert sum(builds.values()) == 20 and len(builds) == 1     # no jitter: one build
+        with pytest.raises(field_mod.FieldError, match="projection"):
+            chalk_builds(pool.drop(columns="projection"), runs=5)
+
+    def test_field_shape_metrics(self, entries, ownership):
+        from src.field import field_shape
+        a, b = self.two(entries, ownership)
+        shape = field_shape([a, a, b])
+        assert shape["entries"] == 3
+        assert shape["distinct_share"] == pytest.approx(2 / 3)
+        assert shape["top_build_share"] == pytest.approx(2 / 3)
+        assert shape["top5_share"] == pytest.approx(1.0)
+

@@ -22,7 +22,8 @@ Everything below is genuinely first-run-on-real-data:
     on the full dressed roster, 2020-2025; the previous v3 lost twice live)
   - the correlated score model has never driven a lineup before (only
     validated against historical stack covariance)
-  - the field/duplication numbers still carry T15's ~6x understatement
+  - T15: the field now carries a calibrated chalk cluster (--chalk-share), so
+    duplication is anchored to real standings for the first time
   - T19: candidates now include one lineup per plausible captain chosen on
     floor/ceiling, the shortlist and the final ordering follow --objective
     (cash: 25th percentile / cash rate; gpp: 90th percentile / top-1% rate)
@@ -44,7 +45,7 @@ from src import db  # noqa: E402
 from src.captain import OBJECTIVES, captain_board, captain_candidates, rank_lineups  # noqa: E402
 from src.duplication import compare_duplication, most_duplicated  # noqa: E402
 from src.contest import PayoutTable  # noqa: E402
-from src.field import generate_field  # noqa: E402
+from src.field import chalk_builds, field_shape, generate_field  # noqa: E402
 from src.liveproj import project_live_pool  # noqa: E402
 from src.ownership import estimate_ownership, optimal_lineup  # noqa: E402
 from src.pool import from_export, load_overrides, apply_overrides, questionable  # noqa: E402
@@ -55,6 +56,10 @@ from src.ingest import nfl_stats  # noqa: E402
 from src.ingest.dk_salaries import parse_dk_export, parse_slate_filename  # noqa: E402
 
 SALARY_FLOOR = 1200      # T17: excludes the DK "will not play" pricing tier
+# T15: calibrated against the 2026-w01 NE@SEA standings and checked on SF@LAR
+# (docs/data-sources.md, "The chalk cluster").
+CHALK_SHARE = 0.20
+CHALK_JITTER = 0.15
 
 
 def refresh_history(season: int) -> None:
@@ -176,6 +181,10 @@ def main(argv=None) -> int:
     p.add_argument("--runs", type=int, default=500)
     p.add_argument("--field-size", type=int, default=5000)
     p.add_argument("--jitter", type=float, default=0.5, help="T15-calibrated default")
+    p.add_argument("--chalk-share", type=float, default=CHALK_SHARE,
+                   help="T15: share of the field drawn from the optimizer's near-optimal builds")
+    p.add_argument("--chalk-jitter", type=float, default=CHALK_JITTER,
+                   help="T15: jitter used to generate the chalk cluster")
     p.add_argument("--trials", type=int, default=2000, help="contest sim trials per candidate")
     p.add_argument("--top", type=int, default=8)
     p.add_argument("--compare-pool", type=int, default=40,
@@ -204,10 +213,19 @@ def main(argv=None) -> int:
 
     own = estimate_ownership(pool, n=args.runs, jitter=args.jitter, seed=args.seed)
     builds = candidate_builds(pool, args.runs, args.jitter, args.seed)
+    # T15: a share of the field converges on the same few builds. The cluster
+    # is what entrants running roughly these projections land on.
+    chalk = chalk_builds(pool, runs=args.runs, jitter=args.chalk_jitter, seed=args.seed + 2) \
+        if args.chalk_share > 0 else None
     field = generate_field(pool[["player_id", "team", "salary"]], own,
-                           size=args.field_size, seed=args.seed + 1)
+                           size=args.field_size, seed=args.seed + 1,
+                           chalk=chalk, chalk_share=args.chalk_share)
+    shape = field_shape(field)
     distinct = len(set(l.key() for l in field))
     print(f"{args.runs} optimizer runs -> {len(builds)} distinct candidates")
+    if chalk:
+        print(f"chalk cluster: {len(chalk)} builds from {sum(chalk.values())} low-jitter runs, "
+              f"{args.chalk_share:.0%} of the field")
 
     # T19: one candidate per plausible captain, chosen on floor/ceiling rather
     # than mean, each with its exact best complement -- so the contest sim
@@ -232,9 +250,9 @@ def main(argv=None) -> int:
               f"{r['mean']:>12.1f}{r['p10']:>7.1f}{r['p25']:>7.1f}{r['p50']:>7.1f}{r['p90']:>7.1f}")
     for lu in board["lineup"]:
         builds[lu] += 0          # union: every captain candidate is on the board
-    print(f"field of {args.field_size}: {distinct} distinct "
-          f"({distinct/args.field_size:.1%}), most-entered "
-          f"{most_duplicated(field, top=1).iloc[0]['dup_rate']*100:.2f}%\n")
+    print(f"field of {args.field_size}: {distinct} distinct ({shape['distinct_share']:.1%}), "
+          f"most-entered {shape['top_build_share']:.2%}, top-5 builds {shape['top5_share']:.2%}  "
+          f"(real fields: 61-69% distinct, ~1.1% top build)\n")
 
     # compare_duplication runs two full contest simulations per candidate, so
     # comparing all distinct builds (hundreds, from --runs optimizer calls) is
