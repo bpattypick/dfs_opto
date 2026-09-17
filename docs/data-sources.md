@@ -887,3 +887,96 @@ hand.
 slate, or let `scripts/live_showdown.py` do it (it now ingests the slate's
 season first and prints the currency check). `config.yaml` `seasons.end`
 must be the season in progress; bump it each September.
+
+## The backtest scored on the full roster (T23): the verdict on v3 reverses
+
+Until now the harness evaluated players *with a stat line* in week W. That
+conditions every number on having played — the one thing a pre-lock
+projection cannot know, and the thing all three live losses turned on
+(Price 0 → started; Fields starter's history → third string; Dobbins
+feature back → 8 carries). The played pool cannot even represent "dressed,
+did not play."
+
+**Pool source: nflverse weekly rosters.** `nfl_data_py.import_weekly_rosters`
+returns HTTP 403 from here; the release asset
+(`weekly_rosters/roster_weekly_{season}.parquet`) downloads fine and is now
+archived per season like everything else. `status` is the game-day roster
+state and **`ACT` is the dressed 46**: 99.7–100% of stat-recording
+player-weeks in every season 2019–2026 carry it (the rest have no roster
+row at all — id gaps, not a different status), and no `INA` player ever
+records a stat. So the roster pool is "every ACT QB/RB/WR/TE on a team with
+a game, plus both DSTs" — ~14 skill players per team, the pool a Showdown
+entrant faces at lock, inactives already announced. The upcoming week's
+roster is published before its games (the 2026 file carried week 2 on the
+Thursday of week 2), so it is pre-lock information. A dressed player with no
+stat line scored 0, and the model is scored on that.
+
+**The class the old pool could not see is a fifth of the pool, every year.**
+2020–2025, 44,908 dressed skill player-weeks; **10,025 (22.3%) recorded no
+stat line**, and 7,062 of those had ≥3 games of history — the model
+projected them their trailing average and got 0. By position: QB 39.7%
+of dressed never record a stat (backup quarterbacks), TE 28.9%, RB 20.0%,
+WR 13.1%.
+
+**Backtest, 2020–2025, same 107 weeks, both pools** (`--pool played` is the
+pre-T23 behaviour and reproduces the earlier runs exactly):
+
+| model                  | pool   | n      | MAE  | Spearman | bias  | top-12/game MAE | top-12 ρ | top-12 bias | zeros | zeros' mean proj |
+|------------------------|--------|--------|------|----------|-------|-----------------|----------|-------------|-------|------------------|
+| prior_average          | played | 34,936 | 5.00 | 0.606    | +0.17 | 6.23            | 0.480    | +0.64       | 11.5% | 3.66             |
+| calibrated_by_position | played | 34,936 | 5.01 | 0.604    | +0.07 | 6.14            | 0.480    | −0.13       | 11.5% | 4.42             |
+| prior_average          | roster | 42,991 | 4.90 | 0.604    | +0.97 | 6.81            | 0.438    | +1.59       | 28.1% | 4.21             |
+| calibrated_by_position | roster | 42,991 | 5.13 | 0.576    | +1.11 | 6.85            | 0.405    | +1.04       | 28.1% | 5.22             |
+
+("top-12/game" = the twelve highest-projected players per game — what a
+Showdown lineup is chosen from. "zeros" = evaluated players who scored 0.)
+
+Three things the honest pool says that the old one could not:
+
+1. **The projection is biased high, and it is the quarterbacks.** Overall
+   bias +0.17 → +0.97; QB bias **+3.42** (MAE 7.60, from 6.85). 36.9% of
+   dressed QBs score 0 and the baseline hands them **8.9 points** on
+   average. In the projected top-12 per game, **28.6% of the QB slots are a
+   zero-scorer projected 12.0** — a backup with a starter's history ranked
+   as a top play. Across all positions **11.0% of projected top-12 slots
+   (2,134 of 19,380) go to a zero-scorer, handed 10.9 points; 79.6% of games
+   have at least one.** That is Justin Fields at 14.6, reproduced sixteen
+   hundred times over six seasons. Nothing in the trailing average can see
+   it; T22 (depth chart + injury report) is built for exactly this.
+
+2. **v3 is worse than the baseline on this pool** — top-12 ρ 0.405 vs 0.438,
+   MAE 5.13 vs 4.90, Spearman 0.576 vs 0.604, and it hands zero-scorers
+   5.2 vs 4.2. The mechanism is its own fix: the per-position intercept
+   *lifts* low projections, which was right on the played pool (the bottom
+   decile ran ~1 point low there) and is exactly wrong when a quarter of
+   the pool scores 0. v3 still has the better top-12 *bias* (+1.04 vs
+   +1.59), because it also pulls the top down. So T18's "a wash on MAE, a
+   bias fix" was a verdict from a flattering pool; on the pool live slates
+   are played on, it is a small regression in rank quality. **v3 is the
+   live model today** (`project_live_pool`). Which to run until T22 lands is
+   an owner call — H9 in TASKS.md — and `--pool roster` is the ship
+   criterion from here on.
+
+3. **A play/no-play oracle alone is worth most of the Showdown gap.**
+   Dropping only the zero-scorers from the roster pool (a cheat, to bound
+   what "will he play?" knowledge is worth): top-12 MAE 6.81 → **6.11**,
+   top-12 bias +1.59 → **+0.33**, top-12 ρ 0.438 → 0.470. Overall Spearman
+   *falls* (0.604 → 0.553) because zeros are easy to rank below everyone;
+   the top-12 numbers are the ones that matter. Combined with the snap
+   oracle measured earlier, availability and role are the whole story.
+
+**What the old pool got right.** MAE is *lower* on the roster pool (4.90 vs
+5.00) — the zeros are cheap misses for low-projected depth players — so a
+single MAE headline would have hidden all of the above. The coverage block
+and the top-12 slice now print on every run so that cannot happen again.
+The excluded-for-no-history share is 3.1% of actual points on both pools:
+rookies with no games are a small leak, not the problem.
+
+**Caveats, stated.** (a) The roster pool treats gameday inactives as known,
+which is true for a Showdown lock (kickoff) and not for a main-slate early
+game — right for the current scope, to be revisited if Classic ever comes
+back in. (b) `min_games` still gates who is scored, so a T22 model that
+supplies a prior for no-history players will need `--min-games 0` to be
+scored on them; the coverage block shows what is being left out either
+way. (c) 2026 week 2 rosters are in the table but not evaluated (no stats
+yet); the harness keys on stat weeks.
