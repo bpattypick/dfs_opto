@@ -45,8 +45,12 @@ python -m src.db
 
 # Ingest nflverse stats for the configured season range (Milestone 2)
 python -m src.ingest.nfl_stats                 # all of seasons.start..seasons.end
-python -m src.ingest.nfl_stats --season 2025   # one season
-python -m src.ingest.nfl_stats --refresh       # re-download instead of using archives
+python -m src.ingest.nfl_stats --season 2026   # one season
+python -m src.ingest.nfl_stats --refresh       # re-download today's files instead of using archives
+# Run this before every slate. A closed season is archived once; the season in
+# progress (seasons.end) and games.csv are re-fetched as dated daily snapshots
+# and the run ends with a currency check ("2026: ingested through week N;
+# completed through week M"). scripts/live_showdown.py does this itself.
 
 # Load DK salary files (Milestone 3/4)
 python -m src.ingest.dk_salaries load                                  # everything in data/raw/salaries/

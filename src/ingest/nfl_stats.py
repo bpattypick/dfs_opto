@@ -142,18 +142,17 @@ def _transform_dst(team_raw: pd.DataFrame, games: pd.DataFrame, season_types) ->
     out["week"] = frame["week"].astype(int)
     out["game_id"] = frame["game_id"]
 
-    out["sacks"] = pd.to_numeric(frame.get("def_sacks"), errors="coerce").fillna(0.0)
-    out["interceptions"] = pd.to_numeric(
-        frame.get("def_interceptions"), errors="coerce"
-    ).fillna(0).astype(int)
-    out["fumbles_rec"] = pd.to_numeric(
-        frame.get("fumble_recovery_opp"), errors="coerce"
-    ).fillna(0).astype(int)
-    out["def_tds"] = pd.to_numeric(frame.get("def_tds"), errors="coerce").fillna(0).astype(int)
-    out["special_tds"] = pd.to_numeric(
-        frame.get("special_teams_tds"), errors="coerce"
-    ).fillna(0).astype(int)
-    out["safeties"] = pd.to_numeric(frame.get("def_safeties"), errors="coerce").fillna(0).astype(int)
+    def column(name: str) -> pd.Series:
+        # A missing optional column is all-zero, not a scalar NaN that breaks .fillna.
+        raw = frame[name] if name in frame.columns else pd.Series(pd.NA, index=frame.index)
+        return pd.to_numeric(raw, errors="coerce").fillna(0)
+
+    out["sacks"] = column("def_sacks").astype(float)
+    out["interceptions"] = column("def_interceptions").astype(int)
+    out["fumbles_rec"] = column("fumble_recovery_opp").astype(int)
+    out["def_tds"] = column("def_tds").astype(int)
+    out["special_tds"] = column("special_teams_tds").astype(int)
+    out["safeties"] = column("def_safeties").astype(int)
     # nflverse exposes blocked FGs/punts on the kicking team's row, not the
     # blocking defense's. Left at 0 until play-by-play attribution is added.
     out["blocked_kicks"] = 0
@@ -200,25 +199,33 @@ def _dst_as_player_rows(dst: pd.DataFrame) -> pd.DataFrame:
 # --- snap counts --------------------------------------------------------------
 
 
-def _attach_snaps(stats: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
+def _attach_snaps(
+    stats: pd.DataFrame, seasons: list[int], refresh: bool = False, cfg=None
+) -> pd.DataFrame:
     """Join offensive snap counts on (normalized name, team, season, week).
 
-    ``import_snap_counts`` keys on PFR IDs, and ``import_ids`` only covers
+    The snap-count release keys on PFR IDs, and ``import_ids`` only covers
     ~7.5k mostly-active players, so a name+team+week join reaches further back
-    than a pfr_id->gsis_id join would. Failures leave NULL snaps rather than
-    blocking the ingest — snaps are a usage nicety, not a scoring input.
+    than a pfr_id->gsis_id join would. Fetched one season at a time through
+    :mod:`src.nflverse` (archived, dated for a live season) so that a single
+    unpublished season leaves only *its own* rows NULL — the previous
+    all-seasons call would have NULLed every season's snaps on the next
+    re-ingest if any one year failed. Snaps are a usage input, not a scoring
+    input, so a miss warns rather than blocks.
     """
-    import nfl_data_py as nfl
-
-    try:
-        snaps = nfl.import_snap_counts(seasons)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("snap counts unavailable (%s); leaving snaps NULL", exc)
+    frames = []
+    for season in seasons:
+        try:
+            frames.append(nflverse.snap_counts(season, refresh=refresh, cfg=cfg))
+        except nflverse.NflverseUnavailable as exc:
+            log.warning("snap counts unavailable for %s (%s); leaving that season's "
+                        "snaps NULL", season, exc)
+    if not frames:
         stats["snaps"] = None
         stats["snap_pct"] = None
         return stats
 
-    snaps = snaps.copy()
+    snaps = pd.concat(frames, ignore_index=True)
     snaps["_key_name"] = snaps["player"].map(normalize_name)
     snaps["_key_team"] = snaps["team"].map(teams_mod.normalize_team)
     snaps = snaps.dropna(subset=["_key_team"])
@@ -286,7 +293,7 @@ def ingest(conn, seasons: list[int], refresh: bool = False, cfg=None) -> dict[st
         raise RuntimeError(f"no player stats could be loaded for seasons {seasons}")
 
     stats = pd.concat(player_frames, ignore_index=True)
-    stats = _attach_snaps(stats, seasons)
+    stats = _attach_snaps(stats, seasons, refresh=refresh, cfg=cfg)
 
     dst = pd.concat(dst_frames, ignore_index=True) if dst_frames else pd.DataFrame()
     if len(dst):
@@ -300,6 +307,62 @@ def ingest(conn, seasons: list[int], refresh: bool = False, cfg=None) -> dict[st
     for table, n in counts.items():
         log.info("%s: %d rows", table, n)
     return counts
+
+
+# --- currency check -----------------------------------------------------------
+
+# A week is complete once its last kickoff is this far in the past.
+_GAME_LENGTH = timedelta(hours=4)
+
+
+def ingest_status(conn, season: int, now: datetime | None = None) -> dict:
+    """What the database holds for ``season`` versus what has been played.
+
+    T21: the projection is only as current as the last ingested week, and
+    nflverse publishes a week's stats a day or two after it ends. This is
+    the check the live path runs before building anything, so a completed
+    week that is still unpublished is said out loud rather than silently
+    left out of every trailing average.
+    """
+    now = now or datetime.now(tz=_UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=_UTC)
+
+    weeks = pd.read_sql_query(
+        "SELECT DISTINCT week FROM player_week_stats WHERE season = ? ORDER BY week",
+        conn, params=(season,),
+    )
+    ingested = [int(w) for w in weeks["week"]]
+
+    games = pd.read_sql_query(
+        "SELECT week, kickoff_utc FROM games WHERE season = ?", conn, params=(season,)
+    )
+    completed: list[int] = []
+    if len(games):
+        games["kick"] = pd.to_datetime(games["kickoff_utc"], utc=True, errors="coerce")
+        last_kick = games.groupby("week")["kick"].max()
+        completed = sorted(
+            int(w) for w, k in last_kick.items() if pd.notna(k) and k + _GAME_LENGTH < now
+        )
+
+    return {
+        "season": season,
+        "ingested_weeks": ingested,
+        "last_ingested_week": max(ingested) if ingested else None,
+        "last_completed_week": max(completed) if completed else None,
+        "missing_weeks": [w for w in completed if w not in ingested],
+    }
+
+
+def format_status(status: dict) -> str:
+    li = status["last_ingested_week"]
+    lc = status["last_completed_week"]
+    line = (f"{status['season']}: ingested through week {li if li is not None else '-'}; "
+            f"completed through week {lc if lc is not None else '-'}")
+    if status["missing_weeks"]:
+        line += (f"\n!! completed week(s) {status['missing_weeks']} not yet published by "
+                 "nflverse (usually by Tuesday) -- re-run before building a lineup")
+    return line
 
 
 def main(argv=None) -> int:
@@ -324,6 +387,9 @@ def main(argv=None) -> int:
         ingest(conn, seasons, refresh=args.refresh, cfg=cfg)
         for table, count in db.table_counts(conn).items():
             print(f"  {table:<20} {count:>9,} rows")
+        for season in seasons:
+            if nflverse.is_live_season(season):
+                print(format_status(ingest_status(conn, season)))
     return 0
 
 

@@ -25,9 +25,6 @@ These block downstream tasks. Each is short.
 
 ## Ready
 
-### T21. Ingest the current season, and keep it current
-`config.yaml` seasons end at 2025, so every "trailing" window on a 2026 slate is last year's role, possibly on another team — the root of T20 and of 40% of each live pool falling to `AvgPointsPerGame` or a refusal (measured on all three archived exports: only 8–9 of the top-14 by salary got a v3 number). Extend `seasons.end` to 2026, run the ingest for weeks played so far, and make "ingest through last completed week" the first step of `scripts/live_showdown.py`'s checklist. **Acceptance:** 2026 rows present in `player_week_stats`, `games`; ingest idempotent on re-run; leakage test green; live pool coverage on the DEN@KC export re-measured and recorded in `docs/data-sources.md`. *Not a modelling change — a data-currency fix. Do first.*
-
 ### T22. Availability / role layer — the largest measured projection lever
 Held-out 2024–25: knowing a player's snap share for the week is worth −0.51 MAE / +0.10 Spearman, 2.5× everything derivable from stat history combined (see data-sources.md, "Where the projection's error actually lives"). Build a leakage-safe `role` table per (player, season, week) from free nflverse sources — `import_depth_charts` (**daily** dated snapshots at ~07:15 UTC with `gsis_id`, `pos_abb`, `pos_rank` 1–8 — KC 2025 has 219 of them; use the last one with `dt` < kickoff, which is leakage-safe by construction; a Fields at KC would have read `pos_rank 3`), `import_injuries` (`report_status`, `practice_status`), and the snap trend already in `player_week_stats` — and use it to (a) gate: a listed backup QB/RB projects near zero regardless of history; a listed starter with no history gets a position-and-depth prior instead of 0.0; (b) feed last-week snap% and its trend as features. **Acceptance:** backtested on T23's full-roster harness, ships only if Spearman on the top-12-per-game slice improves; leakage spot-check deletes future depth-chart rows and asserts unchanged output; Price / Fields / Dobbins cases become tests. *Subsumes T16. This is the one modelling improvement for the month.*
 
@@ -78,6 +75,18 @@ it — that one prices duplication against ROI rather than showing the trade by 
 
 *(append: task id, date, one-line result)*
 
+- **T21. Ingest the current season, and keep it current** — 2026-09-17 — `seasons.end: 2026`;
+  2026 week 1 loaded (+389 player-weeks, full 272-game schedule with week-2 lines). Found and
+  fixed a staleness bug on the way: the raw cache keyed on a bare filename, so a season in
+  progress (and `games.csv`, which changes all year) would have been frozen at first download.
+  `src/nflverse.py` now archives live data as dated daily snapshots, keeps every earlier one, and
+  raises rather than falling back to a stale file. Snap counts now go through the same archived
+  per-season fetcher (previously one unpublished year would have NULLed every season's snaps).
+  `scripts/live_showdown.py` parses season/week from the export filename and runs the ingest
+  first, with `ingest_status()` flagging any completed-but-unpublished week. Re-run is
+  idempotent (identical counts, zero duplicate keys). Coverage on the three archived exports,
+  history before 2026 w2: v3 on 11/10/10 of the top-14 (from 9/8/8); every remaining non-v3
+  player is a backup QB, a kicker, or a <3-game role change — T22's list exactly. 26 new tests.
 - **T13. Real score simulator** — 2026-09-11 — `src/scoremodel.py`: Gaussian copula over lognormal
   marginals, every parameter measured on 2020-2025 (sd = a_pos + b_pos*proj, R^2 0.96; QB-top target
   +0.327, opposing QBs +0.185, DST vs the QB it faces -0.251; else 0). Validated: sd of a real QB+top

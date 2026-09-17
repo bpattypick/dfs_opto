@@ -810,3 +810,80 @@ estimated 1.8 duplicates, not the clean zero I represented it as. Small in
 this case, but the same display-precision issue that caused the earlier
 win%/solo% confusion — a pattern worth fixing at the source (more decimal
 places, or show raw counts) rather than catching by hand each time.
+
+## The raw cache was a staleness bug for anything still changing (T21)
+
+`src/nflverse.py` archived each download under a bare filename and reused it
+forever unless `--refresh`. Correct for a closed season, whose parquet never
+changes. Wrong for two things that were being treated the same way:
+
+- **A season in progress.** `stats_player_week_2026.parquet` is republished
+  every week. Once week 1 was archived, every later ingest would have read
+  the week-1 file and every trailing average would have quietly stopped at
+  week 1 for the rest of the year. `--refresh` would have fixed the data by
+  overwriting the archive — the opposite of "archive raw, always."
+- **`games.csv`.** One file for every season, and it changes all year: scores
+  as games finish, lines as they are posted, next season's schedule in
+  spring. It had been cached once on 2026-09-11.
+
+Fix: live data is fetched at most once per day into a *dated* snapshot
+(`stats_player_week_2026_2026-09-17.parquet`, `games_2026-09-17.csv`), earlier
+snapshots are kept, and a failed download **raises** naming the newest
+snapshot rather than silently using it. A season counts as live until March 1
+of the following year — nflverse last touched the 2025 snap counts on
+2026-02-09, so "the regular season is over" is not the same as "the file is
+final." The bare-named 2019–2025 archives stay as they are.
+
+**Snap counts were never archived, and were all-or-nothing.** `_attach_snaps`
+called `nfl_data_py.import_snap_counts(seasons)` for every season in one go:
+no raw copy on disk, and one unpublished year (which a current season is,
+early on) would have failed the whole call and — because the ingest is
+`INSERT OR REPLACE` — **NULLed every season's snaps on that re-run.** Now
+fetched per season through the same archived fetcher; a miss leaves only
+that season's snaps NULL, with a warning. The release URL is the one the
+library uses (`snap_counts/snap_counts_{season}.parquet`); 2026's file was
+published 2026-09-15 for week 1.
+
+**Publishing lag, observed.** Week 1 ended Monday 2026-09-14. By Thursday
+the 17th, player and team stats were current (file dated 14:19 UTC that
+day, so nflverse re-publishes continuously, not once), snap counts were
+dated Tuesday the 15th. `ingest_status()` compares the last ingested week
+to the last *completed* week (last kickoff + 4h, from `games.kickoff_utc`)
+and the live script prints it before doing anything, so the Thursday-slate
+case — Sunday's stats not yet in — is said out loud instead of being a
+silently shorter window.
+
+**A fragility in `_transform_dst`, exposed by the ingest test fixture.**
+`frame.get("fumble_recovery_opp")` returns a scalar `None` when the column
+is absent, and `pd.to_numeric(None).fillna(0)` then fails on a float. The
+real team-week file has every column so it never fired, but a column
+dropped upstream would have produced an `AttributeError` two calls away
+from the cause. Optional DST columns now zero-fill through one helper.
+
+**Result: 2026 week 1 in, and the live pool is mostly visible now.**
+44,072 → 44,461 player-weeks (+389), 1,960 → 2,232 games (the full 2026
+schedule, so week-2 lines are already queryable), 1,381 → 1,425 players.
+Snap join 99.1%. Second run: identical counts, zero duplicate keys, no
+downloads (today's snapshots reused). Re-measuring the three archived
+exports with history strictly before 2026 week 2 — what the model sees
+for *this* week's slates:
+
+| slate  | unresolved (was) | team_changed (was) | v3 in top-14 (was) | still not v3 in the top-14                          |
+|--------|------------------|--------------------|--------------------|-----------------------------------------------------|
+| DEN@KC | 13 (17)          | 4 (7)              | **11** (9)         | Fields, Ehlinger (bench QBs), Nussmeier (rookie QB) |
+| NE@SEA | 9 (13)           | 5 (9)              | **10** (8)         | DeVito, Morton (bench QBs), Price (<3 games), Myers (K) |
+| SF@LAR | 16 (18)          | 2 (5)              | **10** (8)         | Bennett, Simpson, Rourke (bench QBs), Stribling (<3 games) |
+
+Everyone left is a backup quarterback, a kicker, or a player with fewer
+than three games in his new role — precisely the availability/role class
+T22 is for, and nothing a longer history window would fix. Fields has no
+2026 row (did not play) so he is still flagged `team_changed`, which is
+the right answer. Kenneth Walker III resolves cleanly now: his 2026 week-1
+row is at KC (37.1 points on 23 carries, 6 targets), so the team-change
+flag clears and v3 sees him — the first live slate had to override him by
+hand.
+
+**Operational rule from here:** `python -m src.ingest.nfl_stats` before every
+slate, or let `scripts/live_showdown.py` do it (it now ingests the slate's
+season first and prints the currency check). `config.yaml` `seasons.end`
+must be the season in progress; bump it each September.

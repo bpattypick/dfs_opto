@@ -18,9 +18,12 @@ paths:
   unmatched_review: data/unmatched_review.csv
 
 seasons:
-  # Inclusive range pulled by `python -m src.ingest.nfl_stats`.
+  # Inclusive range pulled by `python -m src.ingest.nfl_stats`. `end` must be
+  # the season in progress: a season's files are re-fetched as dated
+  # snapshots until March 1 of the following year (src/nflverse.py), so
+  # re-running the ingest is what keeps trailing averages current (T21).
   start: 2019
-  end: 2025
+  end: 2026
   # 'REG' only for Phase 1 — DK main slates are regular season.
   season_types: [REG]
 

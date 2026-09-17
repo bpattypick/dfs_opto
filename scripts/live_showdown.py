@@ -12,6 +12,11 @@ winnings. Says so in the output rather than only in this docstring.
 
     python scripts/live_showdown.py data/raw/salaries/<export>.csv
 
+Season and week come from the export's filename (``2026-w02_dk_showdown-...``)
+and the first step is always an ingest of that season (T21): the projection is
+a trailing average, so it is only as good as the last week in the database,
+and before T21 that was last season. ``--no-ingest`` skips it (offline use).
+
 Everything below is genuinely first-run-on-real-data:
   - v3 projections have never driven a lineup before (only backtested)
   - the correlated score model has never driven a lineup before (only
@@ -41,9 +46,24 @@ from src.pool import from_export, load_overrides, apply_overrides, questionable 
 from src.resolve import resolve_pool  # noqa: E402
 from src.scoremodel import CorrelatedScores  # noqa: E402
 from src.showdown import Lineup, lineup_points, lineup_salary  # noqa: E402
+from src.ingest import nfl_stats  # noqa: E402
 from src.ingest.dk_salaries import parse_dk_export, parse_slate_filename  # noqa: E402
 
 SALARY_FLOOR = 1200      # T17: excludes the DK "will not play" pricing tier
+
+
+def refresh_history(season: int) -> None:
+    """T21: fetch the season's latest nflverse files before building anything.
+
+    Dated, archived snapshots (src/nflverse.py) — never a stale cache. Says
+    loudly if a completed week is still unpublished, since every trailing
+    average below would silently omit it.
+    """
+    with db.session() as conn:
+        db.create_schema(conn)
+        nfl_stats.ingest(conn, [season])
+        status = nfl_stats.ingest_status(conn, season)
+    print(nfl_stats.format_status(status))
 
 
 def build_pool(export_path: str, season: int, week: int) -> pd.DataFrame:
@@ -109,8 +129,13 @@ def candidate_builds(pool: pd.DataFrame, runs: int, jitter: float, seed: int):
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("export")
-    p.add_argument("--season", type=int, default=2026)
-    p.add_argument("--week", type=int, default=1)
+    p.add_argument("--season", type=int, default=None,
+                   help="override the season parsed from the export filename")
+    p.add_argument("--week", type=int, default=None,
+                   help="override the week parsed from the export filename; history "
+                        "strictly before this week is what the projection sees")
+    p.add_argument("--no-ingest", action="store_true",
+                   help="skip the T21 ingest of the slate's season (offline use only)")
     p.add_argument("--runs", type=int, default=500)
     p.add_argument("--field-size", type=int, default=5000)
     p.add_argument("--jitter", type=float, default=0.5, help="T15-calibrated default")
@@ -121,7 +146,17 @@ def main(argv=None) -> int:
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args(argv)
 
-    pool = build_pool(args.export, args.season, args.week)
+    meta = parse_slate_filename(args.export)
+    season = args.season or meta["season"]
+    week = args.week or meta["week"]
+    if args.no_ingest:
+        print("--no-ingest: using whatever history is already in the database")
+    else:
+        refresh_history(season)
+    print(f"slate {meta['slate_id']}: projections use history strictly before "
+          f"{season} week {week}\n")
+
+    pool = build_pool(args.export, season, week)
     name = dict(zip(pool.player_id, pool.name))
     src = dict(zip(pool.player_id, pool.proj_source))
 
