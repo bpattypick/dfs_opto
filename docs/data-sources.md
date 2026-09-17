@@ -664,3 +664,44 @@ salary as a role signal for flagged players specifically, since a genuine
 backup is rarely priced at $8,600+ captain-eligible the way a timeshare or
 new starter would be — but salary reflects name recognition too (see the
 Xavier Smith case, T17), so it is a hint, not a substitute for review.
+
+## Third live result: DEN@KC, and T19 confirmed a second time
+
+Projected 94.7, actual **56.5** (computed via `src.scoring.score_offense` from the
+real box score, not a fantasy-site total). No cash, finished roughly rank 2000
+of ~3000. Standings expired before they could be downloaded — the first missed
+calibration opportunity this season; see the H2 note below.
+
+**Real result: DEN 10, KC 31.** A 21-point blowout, nothing like the
+competitive game the field/ownership model assumed. Four of six roster spots
+were on the losing offense, including the captain.
+
+**T19 (captain confidence) is now confirmed twice, not once.** SF@LAR
+captained Stafford at the top of a range the backtest later showed running
++2.0 to +2.5 high; here the optimizer captained J.K. Dobbins — highest mean
+among cap-feasible options — who returned 3.6 points on 8 carries and **zero
+targets**, the single worst game script a non-receiving back can draw. The
+mechanism is the same both times: the optimizer selects a captain purely on
+projected mean, with no notion that a receiving-dependent back in a bad game
+script, or an over-projected top-of-board player, carries more downside than
+its point estimate shows. Two for two on the first two live pipeline
+lineups is enough to stop calling this theoretical.
+
+**The other failure was the tail landing, not a bug.** Troy Franklin — flagged
+in this doc as the standout value pick, 3.51 pts/$1k, the best on the board —
+returned a hard zero (1 target, 0 catches). The measured residual distribution
+already said a player finishes under half his projection about a third of the
+time; a cheap, low-target-share player going to literal zero in a blowout is
+squarely inside that, not a surprise the model should be expected to have
+ruled out. Worth remembering when presenting a "best value" pick going
+forward: cheap and high point-per-dollar also means high variance, and that
+should be said in the same breath as the recommendation, not after the fact.
+
+**A rounding bug of my own, caught while logging this.** The live report
+showed this lineup at "0.00%" duplicated — the actual figure was 0.0600%
+(3 of 5,000 in the simulated field), which rounds to "0.00%" at the table's
+two decimal places. Scaled to the real ~3,000-entry field, that is an
+estimated 1.8 duplicates, not the clean zero I represented it as. Small in
+this case, but the same display-precision issue that caused the earlier
+win%/solo% confusion — a pattern worth fixing at the source (more decimal
+places, or show raw counts) rather than catching by hand each time.
