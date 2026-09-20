@@ -45,27 +45,15 @@ Parse DK contest standings CSVs from `data/raw/standings/` into an `actual_owner
 ## Classic main-slate backlog (H10, 2026-09-20 — new track, sequencing not yet decided)
 
 Real, separate builds. The projection layer (T16/T20-T24) is reused as-is; nothing else is.
-Order matters: T26 before T28 (need a legal Classic lineup before a field of them), T27 before
-T28 is trusted (a field/duplication model is only as good as the score model under it), T29
-before any of it is calibrated rather than just plausible.
+T26 and T27 (below, in Done) unblock T28's construction; T29 is what would let T28's numbers
+be trusted rather than just plausible — same gap the shipped output flags on every run.
 
-- **T26. Classic roster & optimizer.** New module (`src/classic.py`?) for DK Classic rules: QB,
-  RB, RB, WR, WR, WR, TE, FLEX(RB/WR/TE), DST, $50,000 cap, no captain multiplier, players drawn
-  from every team with a game in the window rather than two. New `pydfs-lineup-optimizer` site
-  mode (not `DRAFTKINGS_CAPTAIN_MODE`). **Acceptance:** legal-lineup checker with the same rigor
-  as `src/showdown.py`'s (`check_lineup`/`is_legal`), tests against a real archived Classic
-  export. *Blocks: everything else in this section.*
-- **T27. Cross-game correlation model.** Extend or replace `src/scoremodel.build_correlation` so
-  pairs are correlated within a `game_id` (same measured blocks Showdown uses -- QB/top-target,
-  DST/opp-QB, etc. are properties of a game, not of Showdown specifically) and ~0 across games,
-  unless a real cross-game effect is measured and stated (e.g. weather, early-slate pace) rather
-  than assumed. **Acceptance:** a held-out check analogous to T13's stack-covariance validation,
-  now also confirming near-zero realized correlation between players in different games.
 - **T28. Classic field, ownership and duplication.** `src/ownership.py`/`src/field.py` need a
   Classic-shaped ownership estimator and a field generator that respects position eligibility
   (FLEX) and realistic Classic field sizes (often far larger than a Showdown field). Jitter and
-  any chalk-cluster share are NOT the Showdown-calibrated values -- refit from scratch. *Blocked
-  until T26, T27, T29.*
+  any chalk-cluster share are NOT the Showdown-calibrated values -- refit from scratch, and
+  cannot be calibrated at all until T29 has a real standings file. *Unblocked to build (T26,
+  T27 done); not shippable as a trusted number until T29/H11.*
 - **T29. Calibrate against real Classic standings.** Same discipline as T15: fit on one real
   Classic standings file, check untouched on a second. *Blocked on H11 producing at least one
   file.*
@@ -95,6 +83,16 @@ it — that one prices duplication against ROI rather than showing the trade by 
 
 *(move tasks here with a one-line reason; check each session whether the blocker cleared)*
 
+- **Today's Classic lineup (2026-09-20, 1pm/4pm ET window).** T26/T27 and
+  `scripts/live_classic.py` are built, tested, and smoke-tested end to end (see T26/T27 in
+  Done) — the pipeline is ready. What's missing is the actual DK Classic salary export for
+  today's slate; DK exports are a manual download from the draft screen, no API, and none has
+  been uploaded (`data/raw/salaries/` and the session uploads folder both checked, most recent
+  file is 2026-09-17's Showdown export). Cannot be worked around — the lineup depends on
+  today's real salaries and `AvgPointsPerGame`/injury designations, not a synthetic stand-in.
+  **Owner action:** export the Classic slate from DK (`2026-w02_dk_classic-<slate>.csv`
+  convention) and provide it; `python scripts/live_classic.py <file>` from there. First
+  kickoff ~17:00 UTC (1:00pm ET).
 - **T4. Optimal-rate ownership baseline** — estimator half is done and committed
   (`src/ownership.py`, `estimate_ownership(pool, n=1000)` returning CPT/FLEX/total rates, 23 tests).
   Remaining: the calibration script comparing it to `actual_ownership` and reporting MAE, which
@@ -105,6 +103,35 @@ it — that one prices duplication against ROI rather than showing the trade by 
 
 *(append: task id, date, one-line result)*
 
+- **T26. Classic roster & optimizer** — 2026-09-20 — `src/classic.py`: DK Classic rules
+  (QB/RB/RB/WR/WR/WR/TE/FLEX/DST, $50,000 cap, no captain multiplier, no team-count
+  restriction — confirmed against `pydfs_lineup_optimizer.get_optimizer(Site.DRAFTKINGS,
+  Sport.FOOTBALL)`), `check_lineup`/`is_legal` at the same rigor as `src/showdown.py`. 14
+  tests. `src/classic_optimizer.py` wraps the ILP solver (`optimal_lineup(pool, projections)
+  -> classic.Lineup`), mirroring `src.ownership.optimal_lineup`'s role for Showdown; 6 tests.
+  `src/pool.py` and `src/ingest/dk_salaries.py` needed **zero changes** — both were already
+  generic across formats (confirmed by full read, not just inspection). No real Classic
+  export exists yet to test against (H10's stated acceptance bar); tested against a
+  synthetic pool instead — re-verify shape against a real DK Classic export the first time
+  one is archived.
+- **T27. Cross-game correlation model** — 2026-09-20 — `src/scoremodel.build_correlation`
+  takes an optional `game_id` column: absent, unchanged one-shared-game behavior (every
+  existing Showdown test passes untouched, 22/22); present, correlation is block-diagonal by
+  game using the same measured blocks, 0 across games, with a loud refusal if a team's rows
+  carry more than one `game_id` (a join bug, not real data). 6 new tests confirm within-game
+  blocks are unchanged, cross-game pairs are exactly 0 even for relationships that would
+  otherwise apply (e.g. two QBs in different games do NOT get the opponent-QB +0.185), and
+  the matrix stays PSD with multiple games. No real cross-game effect (weather, pace) is
+  measured or assumed — T28/T29 would be where that gets checked, if it's ever worth
+  checking. `scripts/live_classic.py` (new) builds each team's `game_id` from the `games`
+  table and passes it through. Extracted `src/livepool.py` (the ingest -> resolve -> v4
+  project -> override chain, previously local to `scripts/live_showdown.py`) so both live
+  drivers share one implementation instead of two copies drifting; `live_showdown.py`'s
+  behavior is unchanged (still 563/563 passing after the move). Smoke-tested end-to-end
+  against a synthetic 3-game Classic pool built from real week-2 rosters — ingest, resolve,
+  v4 projection (including a real `Out` status correctly zeroing two players), game_id
+  mapping, jittered optimizer candidates, and score-distribution ranking all worked; output
+  correctly refuses to print any ownership/field/duplication number and says so loudly.
 - **T15. Chalk cluster in the field generator** — 2026-09-17 — `generate_field(chalk=, chalk_share=)`:
   a share of the field is drawn from the optimizer's near-optimal builds (`field.chalk_builds`,
   frequency-weighted), the rest sampled diffusely against the residual ownership, cluster lineups

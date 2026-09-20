@@ -1360,3 +1360,40 @@ one more reason H4/H8 matter. (c) Field size is the real contest's; a
 extrapolation the shape metrics do not depend on strongly (shares, not
 counts), but the most-entered *count* does.
 
+## DK Classic format, confirmed against the optimizer library (T26, 2026-09-20)
+
+Built same-day off H10's decision to expand scope, with no real Classic
+export in hand yet to check against — so this was confirmed against
+`pydfs_lineup_optimizer.get_optimizer(Site.DRAFTKINGS, Sport.FOOTBALL)`
+directly rather than assumed from memory of the format:
+
+- **No kicker slot.** The roster is QB, RB, RB, WR, WR, WR, TE, FLEX
+  (RB/WR/TE), DST — 9 players, $50,000 cap. If a real export carries K rows
+  (older archives might), they will parse fine (`src/pool.py` is
+  position-agnostic) but never be selectable — no slot accepts them. Not
+  currently checked for and flagged; if a K row ever *should* have been
+  selectable, that would mean DK changed the format, and `src/classic.py`'s
+  `ROSTER_SIZE`/`FLEX_ELIGIBLE` would need updating alongside it.
+- **No team-count restriction**, unlike Showdown's "both teams" rule —
+  `max_from_one_team` and `min_teams` are both `None` on the Classic
+  optimizer settings. A Classic lineup can legally stack every skill
+  position from one team; nothing in `src/classic.py` or
+  `src/classic_optimizer.py` prevents that, matching DK's real rule.
+- **`src/pool.py` and `src/ingest/dk_salaries.py` needed zero changes.**
+  Both were already fully generic across formats — no captain-multiplier
+  logic, no roster-shape assumption anywhere in either file. The only
+  Showdown-specific code in the whole live-slate path turned out to be
+  `src/showdown.py` itself (the roster-rule module) and the captain-mode
+  branch of `src/ownership.py`'s optimizer wrapper — both cleanly mirrored
+  rather than touched. This means the H10 decision's estimate of "genuinely
+  new work" for the roster/optimizer layer was accurate in kind but the
+  *pool-building* half of that estimate turned out to already be done.
+- **Not yet checked against a real export.** T26/T27's tests use a
+  synthetic pool built from real week-2 rosters (see TASKS.md), not an
+  archived DK Classic CSV — none existed at build time. The first real
+  Classic export received should be diffed against these assumptions
+  (header names, whether K rows appear, whether `Roster Position` ever says
+  something other than the base position + `/FLEX`) the same way the
+  Showdown export was checked in "DK Showdown export: verified against a
+  real slate" above.
+
