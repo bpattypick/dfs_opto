@@ -10,7 +10,17 @@ Owner is a solo builder with a full-time job. Python/pandas/SQL background, comf
 
 ## Current scope (through January 2027)
 
-NFL **Showdown** slates and **soft-field contests only**. Not Sunday main-slate large-field GPPs. One modeling improvement per month. Anything outside this is in the parking lot — if a task seems to require it, stop and flag rather than expanding scope.
+NFL **Showdown** slates and **soft-field contests**, **and now DK Classic
+main-slate GPPs** (H10, `docs/decisions.md`, decided 2026-09-20 — both games
+are in scope, Showdown is not being replaced). Classic has none of
+Showdown's downstream infrastructure yet (roster/optimizer, correlation,
+field/ownership calibration all need real, separate builds — see the
+Classic backlog in `TASKS.md`); the projection layer transfers. One modeling
+improvement per month remains the pace *within* whichever track is being
+worked — read `docs/decisions.md` (H10) before assuming Classic sequencing.
+Anything outside Showdown *and* Classic Sunday/Thursday/Monday main-slate
+NFL contests is still in the parking lot — stop and flag rather than
+expanding scope further without a recorded decision.
 
 ## Read these before working
 

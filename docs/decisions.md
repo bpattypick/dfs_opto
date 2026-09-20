@@ -10,6 +10,69 @@ allocation and stake sizing). See the human-only queue in `TASKS.md`.
 
 ---
 
+## H10 — Expand scope to DK Classic main-slate GPPs
+
+**Decided 2026-09-20. Owner: yes, undoubtedly — expand to Classic. Showdown
+stays in scope alongside it, not replaced by it** ("more showdown
+opportunities" than expected, so both games are worth playing).
+
+Asked for a lineup on the day's 1pm/4pm ET Classic window (11 games, DK
+Classic roster). Declined in the moment per the scope line in `CLAUDE.md` at
+the time ("NFL Showdown slates ... only. Not Sunday main-slate large-field
+GPPs"), and the question was put back to the owner rather than guessed at.
+Confirmed: expand.
+
+**This supersedes the "Scope through January" line in
+`docs/dfs-roadmap-v2.md`** ("NFL Showdown slates + soft-field contests
+only"), the same way the Sept 11 plan revision superseded that document's
+Phase 2+ ordering — the roadmap document itself is left as the historical
+record; this entry is the current instruction.
+
+**What transfers from the Showdown build, and what does not.** The
+projection layer (T16/T20/T21/T22/T23/T24 — ingest, roles, `RoleAware`, the
+empirical score marginals) is per-player and per-position, not
+Showdown-shaped, and carries over close to as-is. Everything downstream does
+not and needs real, separate work, each piece on the order of what its
+Showdown counterpart took:
+
+- **Roster/optimizer.** `src/showdown.py` and the optimizer mode in
+  `src/ownership.py` hardcode 1 CPT + 5 FLEX, one cap, two teams. Classic is
+  QB/RB/RB/WR/WR/WR/TE/FLEX/DST across as many teams as have a game in the
+  window. New module, new optimizer mode, not a parameter change.
+- **Correlation.** `src/scoremodel.build_correlation` is built on "a
+  Showdown slate is one game" — every player pair in the pool is scored
+  against every other. Across 11 independent games that structure is wrong;
+  it needs to be block-diagonal by `game_id`, correlated within a game and
+  ~0 across games (unless a real cross-game effect is measured, e.g. weather
+  or pace-of-play — not assumed, checked). Genuinely new work, not a
+  reparameterization.
+- **Field, ownership, duplication.** The jitter=0.5 calibration and the T15
+  chalk cluster (share, jitter) were fitted against exactly two real
+  single-game Showdown standings files. A Classic GPP field is a different
+  animal — far larger, spread across many games, different concentration
+  dynamics — and needs its own real standings to calibrate against from
+  scratch. No Classic standings are archived yet; a Classic H2 equivalent
+  (download every entered contest's standings) is the prerequisite, same as
+  it was for Showdown.
+- **Captain confidence (T19).** Does not port as a concept — there is no
+  captain slot. The underlying idea (choose by floor/ceiling, not mean) still
+  applies to which players anchor a Classic build, but the mechanism needs
+  redesigning around stack construction instead.
+
+**Knowingly accepted:** none of this ships fast. Showdown took from Sept 9 to
+Sept 20 to go from nothing to a calibrated, validated pipeline, working
+evenings-and-weekends. Classic is comparable in size. **No lineup was built
+for the slate that prompted this decision** — building one against zero
+validated infrastructure would repeat exactly the mistake the ledger and the
+leakage guarantee exist to prevent, on the same day the decision was made.
+
+**Sequencing is still open** — whether Classic runs as a second monthly-
+cadence track alongside Showdown or takes over the cadence until it reaches
+Showdown's current maturity is an owner pacing call, not decided here. See
+the Classic backlog items added to `TASKS.md`.
+
+---
+
 ## H7 — DK `AvgPointsPerGame` is the interim projection source
 
 **Decided 2026-09-09. Owner: yes, provisionally.**

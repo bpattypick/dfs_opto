@@ -19,7 +19,8 @@ These block downstream tasks. Each is short.
 - [ ] **H8. Player prop lines — pull now, or wait for January?** Props are a much better projection input than `AvgPointsPerGame` (forward-looking, market-priced, already absorb injury/matchup/game-script news) and would also give the score simulator real per-player variance instead of the placeholder's flat coefficient. Two reasons it is your call, not mine: player-prop markets are a **paid tier** on The Odds API (`config.yaml` has the odds block wired for spreads/totals only, currently disabled), and the roadmap schedules props for Step 5 in **January**, so doing it now is a second modelling improvement this month against the one-per-month cadence. If yes, props must be archived pre-lock with `pulled_at` or backtests leak. *Blocks: nothing; would upgrade T4, T5 and T6 inputs at once.* **Priority raised 2026-09-17:** the held-out measurement in data-sources.md shows role/availability knowledge is the single largest projection lever (2.5× all stat-history features combined); props are the market's already-role-aware number and would cover the top of the board in one step while T22 is built from free sources.
 - [x] **H9. Which model drives live slates until T22 lands — ANSWERED BY T22 2026-09-17: neither; v4 (`RoleAware`) beats both on the honest pool and is the live default.** Owner may still veto — the reasoning below stands as the record of why the question arose.
   Original question: T23's full-roster backtest reverses T18's verdict. On the pool a Showdown entrant actually faces (everyone who dressed, 0 for no stat line), `calibrated_by_position` (v3, currently wired into `project_live_pool`) is *worse* than the plain trailing average: top-12-per-game Spearman 0.405 vs 0.438, MAE 5.13 vs 4.90, and it hands zero-scorers 5.2 points vs 4.2. The mechanism is the per-position intercept: it lifts low projections (right for the played pool, where the bottom decile ran ~1 point low) and that is exactly wrong when 28% of the pool — 40% of dressed QBs — scores 0. v3 still has the better top-12 *bias* (+1.04 vs +1.59). **Recommendation: keep v3 live and treat T22 as the real fix** (role gating removes the zero-scorers v3 mis-lifts, after which the calibration is right again), but this is a model-selection call on live money, so it is yours. Either way, `--pool roster` is the ship criterion from now on. *Blocks: nothing in code.*
-- [ ] **H10. Expand scope to DK Classic main-slate GPPs — owner asked 2026-09-20, out of current scope.** Asked for a lineup on today's 1pm/4pm ET Sunday window (11 separate games, DK Classic roster: QB/RB/RB/WR/WR/WR/TE/FLEX/DST). CLAUDE.md is explicit: "NFL Showdown slates and soft-field contests only. Not Sunday main-slate large-field GPPs... stop and flag rather than expanding scope." Declined to build it. Not a capability gap -- nearly every layer past the projection is Showdown-specific and unvalidated for this shape: `src/showdown.py`/`src/ownership.py` hardcode the 1 CPT + 5 FLEX / $50k / two-team optimizer; `src/scoremodel.py`'s correlation matrix is built on "a Showdown slate is one game" and would need to be block-diagonal across 11 independent games instead, never built or measured; the T15 chalk-cluster share/jitter and the jitter=0.5 ownership calibration were fitted on two single-game Showdown standings files and say nothing about an 11-game large-field GPP. v4/RoleAware projections would mostly transfer (per-player, not Showdown-specific). **Owner decision needed:** amend the roadmap/CLAUDE.md scope (real work: a Classic optimizer, a cross-game correlation model, ownership/field calibration against real Classic standings -- a project on the order of what Showdown took) or confirm Showdown-only stands and this was a one-off ask. Record the answer in `docs/decisions.md` either way. *Blocks: any Classic/main-slate lineup work.*
+- [x] **H10. Expand scope to DK Classic main-slate GPPs — ANSWERED 2026-09-20: yes, undoubtedly.** Showdown stays in scope alongside Classic, not replaced. Full reasoning, what transfers from the Showdown build and what needs real separate work, in `docs/decisions.md`. Supersedes the "Showdown + soft-field only" scope line in `docs/dfs-roadmap-v2.md` and in `CLAUDE.md`. No lineup was built for the slate that prompted the question -- see the Classic backlog below for the real work, none of which is done yet. **Feeds H11.**
+- [ ] **H11. Download Classic contest standings** after every Classic contest entered, into `data/raw/standings/` (same convention as H2). The Classic field/ownership/duplication work (T27) has nothing to calibrate against without real standings, same bottleneck H2 was for Showdown T15. *Blocks: T27 and any calibrated Classic field/ownership model.*
 
 - [ ] **H4. Vendor projection subscription** — decide yes/no and which. If yes, start archiving Thursday + Sunday exports. *Blocks: T10, and is one answer to H7. Low urgency only if H7 is settled another way.*
 
@@ -40,6 +41,38 @@ Parse DK contest standings CSVs from `data/raw/standings/` into an `actual_owner
 - **T8.** Late-swap news pipeline (October–November). Blocked on H3.
 - **T9.** Ownership model, LightGBM (December). Needs ≥6 weeks of standings archive.
 - **T10.** Projection ensemble (January, only if the ledger argues for it). Blocked on H4.
+
+## Classic main-slate backlog (H10, 2026-09-20 — new track, sequencing not yet decided)
+
+Real, separate builds. The projection layer (T16/T20-T24) is reused as-is; nothing else is.
+Order matters: T26 before T28 (need a legal Classic lineup before a field of them), T27 before
+T28 is trusted (a field/duplication model is only as good as the score model under it), T29
+before any of it is calibrated rather than just plausible.
+
+- **T26. Classic roster & optimizer.** New module (`src/classic.py`?) for DK Classic rules: QB,
+  RB, RB, WR, WR, WR, TE, FLEX(RB/WR/TE), DST, $50,000 cap, no captain multiplier, players drawn
+  from every team with a game in the window rather than two. New `pydfs-lineup-optimizer` site
+  mode (not `DRAFTKINGS_CAPTAIN_MODE`). **Acceptance:** legal-lineup checker with the same rigor
+  as `src/showdown.py`'s (`check_lineup`/`is_legal`), tests against a real archived Classic
+  export. *Blocks: everything else in this section.*
+- **T27. Cross-game correlation model.** Extend or replace `src/scoremodel.build_correlation` so
+  pairs are correlated within a `game_id` (same measured blocks Showdown uses -- QB/top-target,
+  DST/opp-QB, etc. are properties of a game, not of Showdown specifically) and ~0 across games,
+  unless a real cross-game effect is measured and stated (e.g. weather, early-slate pace) rather
+  than assumed. **Acceptance:** a held-out check analogous to T13's stack-covariance validation,
+  now also confirming near-zero realized correlation between players in different games.
+- **T28. Classic field, ownership and duplication.** `src/ownership.py`/`src/field.py` need a
+  Classic-shaped ownership estimator and a field generator that respects position eligibility
+  (FLEX) and realistic Classic field sizes (often far larger than a Showdown field). Jitter and
+  any chalk-cluster share are NOT the Showdown-calibrated values -- refit from scratch. *Blocked
+  until T26, T27, T29.*
+- **T29. Calibrate against real Classic standings.** Same discipline as T15: fit on one real
+  Classic standings file, check untouched on a second. *Blocked on H11 producing at least one
+  file.*
+- **T30. Stack/build-anchor selection (Classic's T19).** No captain slot, so T19's mechanism does
+  not port, but its idea does: choose which player(s) to stack a lineup around by floor/ceiling
+  from the (now cross-game-aware) score model, not by mean projection alone. Design fresh once
+  T26-T28 exist to design against.
 
 ## Found while working (not yet scheduled)
 
