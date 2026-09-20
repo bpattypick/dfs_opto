@@ -95,6 +95,61 @@ class TestCorrelationMatrix:
             scoremodel.build_correlation(s)
 
 
+class TestCrossGameCorrelation:
+    """T27: block-diagonal by game_id for a multi-game Classic slate."""
+
+    def two_game_slate(self):
+        s = slate().copy()
+        s["game_id"] = "G1"
+        other = pd.DataFrame([
+            ("qb_c", "QB", "CCC", 19.0), ("wr1_c", "WR", "CCC", 15.0),
+            ("qb_d", "QB", "DDD", 17.0), ("dst_d", "DST", "DDD", 6.0),
+        ], columns=["player_id", "position", "team", "projection"])
+        other["game_id"] = "G2"
+        return pd.concat([s, other], ignore_index=True)
+
+    def test_within_game_correlation_is_unchanged(self):
+        s = self.two_game_slate()
+        R = scoremodel.build_correlation(s)
+        ids = s["player_id"].tolist()
+        assert R[ids.index("qb_a"), ids.index("wr1_a")] == pytest.approx(0.327)
+        assert R[ids.index("dst_a"), ids.index("qb_b")] == pytest.approx(-0.251)
+
+    def test_cross_game_pairs_are_independent_even_when_same_relationship(self):
+        s = self.two_game_slate()
+        R = scoremodel.build_correlation(s)
+        ids = s["player_id"].tolist()
+        # qb_a and qb_c would be "opponent QB-QB" (+0.185) if game were ignored.
+        assert R[ids.index("qb_a"), ids.index("qb_c")] == 0.0
+        assert R[ids.index("qb_a"), ids.index("wr1_c")] == 0.0
+        assert R[ids.index("dst_a"), ids.index("qb_d")] == 0.0
+
+    def test_second_game_still_gets_its_own_within_game_blocks(self):
+        s = self.two_game_slate()
+        R = scoremodel.build_correlation(s)
+        ids = s["player_id"].tolist()
+        assert R[ids.index("qb_c"), ids.index("wr1_c")] == pytest.approx(0.327)
+        assert R[ids.index("qb_c"), ids.index("qb_d")] == pytest.approx(0.185)
+
+    def test_matrix_stays_symmetric_unit_diagonal_and_psd_with_two_games(self):
+        R = scoremodel.build_correlation(self.two_game_slate())
+        assert np.allclose(R, R.T)
+        assert np.allclose(np.diag(R), 1.0)
+        assert np.linalg.eigvalsh(R).min() > -1e-9
+
+    def test_no_game_id_column_falls_back_to_one_shared_game(self):
+        # Backward compatibility: Showdown slates carry no game_id at all.
+        R = scoremodel.build_correlation(slate())
+        ids = slate()["player_id"].tolist()
+        assert R[ids.index("qb_a"), ids.index("qb_b")] == pytest.approx(0.185)
+
+    def test_a_team_split_across_two_game_ids_is_refused(self):
+        s = self.two_game_slate()
+        s.loc[s["player_id"] == "wr1_a", "game_id"] = "G2"
+        with pytest.raises(ContestError, match="more than one game_id"):
+            scoremodel.build_correlation(s)
+
+
 class TestCorrelatedScores:
     def test_shape_and_player_order(self):
         m = scoremodel.CorrelatedScores(slate())

@@ -318,10 +318,15 @@ def _pair_key(rel: str, pos_a: str, pos_b: str, a_is_top: bool, b_is_top: bool):
 def build_correlation(slate: pd.DataFrame) -> np.ndarray:
     """Correlation matrix over the slate's players, in slate row order.
 
-    Each team's highest-projected WR/TE is its QB's "top" target. Pairs on
-    different teams are opponents (a Showdown slate is one game); pairs on the
-    same team are teammates. Repaired to positive semi-definite if the block
-    values, which were each measured separately, do not quite compose.
+    Each team's highest-projected WR/TE is its QB's "top" target. Pairs on the
+    same team are teammates; pairs on different teams are opponents, using the
+    measured single-game blocks -- but only within the same game. ``game_id``
+    is optional: omitted, every player is treated as sharing the pool's one
+    game (Showdown, unchanged); present, it turns on block-diagonal-by-game
+    correlation for a multi-game Classic slate, where pairs in different games
+    get 0 (T27 -- no cross-game effect is measured, so none is assumed).
+    Repaired to positive semi-definite if the block values, which were each
+    measured separately, do not quite compose.
     """
     missing = [c for c in REQUIRED if c not in slate.columns]
     if missing:
@@ -330,6 +335,13 @@ def build_correlation(slate: pd.DataFrame) -> np.ndarray:
         raise ContestError("duplicate player_id in slate")
 
     s = slate.reset_index(drop=True)
+    has_game = "game_id" in s.columns
+    if has_game:
+        multi = s.groupby("team")["game_id"].nunique()
+        bad = multi[multi > 1]
+        if len(bad):
+            raise ContestError(f"team(s) with more than one game_id: {list(bad.index)}")
+
     top = set()
     for team, g in s[s["position"].isin(PASS_CATCHERS)].groupby("team"):
         top.add(g["projection"].idxmax())
@@ -337,8 +349,11 @@ def build_correlation(slate: pd.DataFrame) -> np.ndarray:
     n = len(s)
     R = np.eye(n)
     pos, team = s["position"].tolist(), s["team"].tolist()
+    game = s["game_id"].tolist() if has_game else None
     for i in range(n):
         for j in range(i + 1, n):
+            if has_game and game[i] != game[j]:
+                continue          # different games: independent, R stays 0 off-diagonal
             rel = "teammate" if team[i] == team[j] else "opponent"
             r = _pair_key(rel, pos[i], pos[j], i in top, j in top)
             R[i, j] = R[j, i] = r

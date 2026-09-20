@@ -40,99 +40,21 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src import config as config_mod  # noqa: E402
-from src import db  # noqa: E402
 from src.captain import OBJECTIVES, captain_board, captain_candidates, rank_lineups  # noqa: E402
 from src.duplication import compare_duplication, most_duplicated  # noqa: E402
 from src.contest import PayoutTable  # noqa: E402
 from src.field import chalk_builds, field_shape, generate_field  # noqa: E402
-from src.liveproj import project_live_pool  # noqa: E402
+from src.livepool import build_pool, refresh_history  # noqa: E402
 from src.ownership import estimate_ownership, optimal_lineup  # noqa: E402
-from src.pool import from_export, load_overrides, apply_overrides, questionable  # noqa: E402
-from src.resolve import resolve_pool  # noqa: E402
 from src.scoremodel import CorrelatedScores, load_marginals  # noqa: E402
 from src.showdown import Lineup, lineup_points, lineup_salary  # noqa: E402
-from src.ingest import nfl_stats  # noqa: E402
-from src.ingest.dk_salaries import parse_dk_export, parse_slate_filename  # noqa: E402
+from src.ingest.dk_salaries import parse_slate_filename  # noqa: E402
 
-SALARY_FLOOR = 1200      # T17: excludes the DK "will not play" pricing tier
 # T15: fitted on the 2026-w01 NE@SEA standings (63.5% distinct / 0.97% top
 # build vs real 61.5% / 1.10%) and checked untouched on SF@LAR (73.5% / 0.63%
 # vs real 68.7% / 1.06%). See docs/data-sources.md, "The chalk cluster".
 CHALK_SHARE = 0.30
 CHALK_JITTER = 0.30
-
-
-def refresh_history(season: int) -> None:
-    """T21: fetch the season's latest nflverse files before building anything.
-
-    Dated, archived snapshots (src/nflverse.py) — never a stale cache. Says
-    loudly if a completed week is still unpublished, since every trailing
-    average below would silently omit it.
-    """
-    with db.session() as conn:
-        db.create_schema(conn)
-        nfl_stats.ingest(conn, [season])
-        status = nfl_stats.ingest_status(conn, season)
-    print(nfl_stats.format_status(status))
-
-
-def build_pool(export_path: str, season: int, week: int) -> pd.DataFrame:
-    parsed = parse_dk_export(export_path)
-    unavailable = len(parsed) - len(
-        parsed[~parsed["status"].fillna("").str.upper().isin(("OUT", "IR", "IR-R", "SUSP", "NA"))]
-    )
-    if unavailable:
-        print(f"excluding {unavailable} OUT/IR players")
-    flagged = questionable(parsed)
-    if len(flagged):
-        print(f"questionable (kept): {', '.join(sorted(flagged['dk_name']))}")
-
-    pool = from_export(export_path)
-    slate_id = parse_slate_filename(export_path)["slate_id"]
-    overrides_path = config_mod.load().path("projection_overrides")
-    try:
-        overrides = load_overrides(overrides_path, slate_id)
-    except FileNotFoundError:
-        overrides = None
-
-    with db.session() as conn:
-        resolved = resolve_pool(conn, pool, season=season, week=week)   # T14: the week's rosters
-        resolved_n = resolved["gsis_id"].notna().sum()
-        projected = project_live_pool(conn, resolved, season=season, week=week)
-    v4_n = (projected["proj_source"] == "v4").sum()
-    print(f"resolved {resolved_n}/{len(projected)} to history; "
-          f"{v4_n} projected with v4 (role-aware), {len(projected) - v4_n} on AvgPointsPerGame")
-
-    # A committed override is the owner's explicit read and wins over the
-    # model -- applied AFTER projection (before T22 it ran first and v3 then
-    # overwrote it for anyone it could project), and labelled so it is visible.
-    if overrides is not None and len(overrides):
-        print(f"applying {len(overrides)} committed projection override(s) over the model")
-        projected = apply_overrides(projected, overrides)
-        projected.loc[projected["name"].isin(overrides["dk_name"]), "proj_source"] = "override"
-
-    # T22: the role each projection rests on, for the players that decide a
-    # Showdown slate. A backup QB at rank 2 should read as a small number here;
-    # if the depth chart is wrong (it happens), this is where to see it and
-    # fix it with a committed override.
-    top = projected.sort_values("salary", ascending=False).head(16)
-    print("\nrole behind each projection (top 16 by salary):")
-    print(f"     {'player':<22}{'team':<5}{'pos':<4}{'depth':>6}{'rank':>5}  {'injury':<13}{'proj':>6}  source")
-    for _, r in top.iterrows():
-        depth = "-" if pd.isna(r.get("depth_rank")) else f"{int(r['depth_rank'])}"
-        rank = "-" if pd.isna(r.get("eff_rank")) else f"{int(r['eff_rank'])}"
-        inj = r.get("injury_status") or ""
-        flag = "  TEAM CHANGE" if bool(r.get("team_changed", False)) else ""
-        print(f"     {r['name']:<22}{r['team']:<5}{r['position']:<4}{depth:>6}{rank:>5}  {inj:<13}"
-              f"{r['projection']:>6.1f}  {r['proj_source']}{flag}")
-    print()
-
-    floored = projected[projected["salary"] >= SALARY_FLOOR].reset_index(drop=True)
-    if len(floored) < len(projected):
-        print(f"salary floor ${SALARY_FLOOR}: excluded "
-              f"{len(projected) - len(floored)} minimum-priced players (T17)\n")
-    return floored
 
 
 # A synthetic, clearly-labelled payout table -- ranking tool only. Shaped for
