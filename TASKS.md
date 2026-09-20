@@ -92,7 +92,15 @@ it — that one prices duplication against ROI rather than showing the trade by 
   today's real salaries and `AvgPointsPerGame`/injury designations, not a synthetic stand-in.
   **Owner action:** export the Classic slate from DK (`2026-w02_dk_classic-<slate>.csv`
   convention) and provide it; `python scripts/live_classic.py <file>` from there. First
-  kickoff ~17:00 UTC (1:00pm ET).
+  kickoff ~17:00 UTC (1:00pm ET). **2026-09-20, later same day: owner reports they may not be
+  able to get it** — DK's "Export to CSV" is a desktop-web feature of the draft-room/contest
+  lobby UI, not present in the DraftKings mobile app (see data-sources.md). Two things worth
+  trying that don't need a full computer: a mobile browser's "desktop site" mode on the
+  contest lobby page (may or may not render the export link — the page is JS-heavy); or any
+  brief computer access (work machine, library) just long enough to click Export and send the
+  file. If neither is possible today, this slate does not get a Classic lineup — the pipeline
+  is ready and will work the next time an export is available, real money is not worth
+  fabricating a pool over.
 - **T4. Optimal-rate ownership baseline** — estimator half is done and committed
   (`src/ownership.py`, `estimate_ownership(pool, n=1000)` returning CPT/FLEX/total rates, 23 tests).
   Remaining: the calibration script comparing it to `actual_ownership` and reporting MAE, which

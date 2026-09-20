@@ -1388,6 +1388,14 @@ directly rather than assumed from memory of the format:
   rather than touched. This means the H10 decision's estimate of "genuinely
   new work" for the roster/optimizer layer was accurate in kind but the
   *pool-building* half of that estimate turned out to already be done.
+- **DK's "Export to CSV" is desktop-web only, not in the mobile app.** Found 2026-09-20 when
+  the owner wasn't at a computer for the day's Classic slate: the export link lives on the
+  draft-room/contest-lobby page of draftkings.com, which the DraftKings mobile app does not
+  expose — the app has no equivalent salary-export feature. A mobile browser in "desktop site"
+  mode may or may not render it (the page is JS-heavy); the reliable path is any computer,
+  even brief access. Same true for Showdown, just never surfaced before because every Showdown
+  export this project has used so far was pulled from a computer. Worth remembering before
+  promising a same-day lineup on a day the owner is phone-only.
 - **Not yet checked against a real export.** T26/T27's tests use a
   synthetic pool built from real week-2 rosters (see TASKS.md), not an
   archived DK Classic CSV — none existed at build time. The first real
