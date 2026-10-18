@@ -6,9 +6,12 @@
 # fetched directly from nflverse (src/nflverse.py) because the library's
 # hardcoded URLs are stale.
 
+# pyarrow pinned too: >=19 requires numpy>=2.0, which breaks against the
+# numpy==1.26.4 pin above (hit fresh on 2026-10-18: an unpinned resolve
+# picked a newer pyarrow and every import failed before anything ran).
 pandas==1.5.3
 numpy==1.26.4
-pyarrow>=14.0.0
+pyarrow==14.0.2
 nfl_data_py==0.3.3
 requests>=2.31.0
 rapidfuzz==3.14.5
